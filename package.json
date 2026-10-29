@@ -1,7 +1,7 @@
 {
   "name": "dsh-browser",
   "description": "让 DeepSeek Harness 驱动你已登录的真实浏览器：本地 WebSocket 桥接 Chrome 扩展，自带 browser_* 工具、标签页归属与接管让出、无痕隔离实例，开关都在设置页",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

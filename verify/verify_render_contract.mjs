@@ -350,9 +350,6 @@ const GROUND_TRUTH = [
   ["browser_hold", "hold", { action: "on", note: "改档中" },
     { tabId: 3, action: "on", active: false, covered: false, note: "改档中", reason: "error-page" },
     ["covered", "error-page", "\"active\":false"]],
-  // browser_help 不经过扩展：它读注册表，所以 command 传 null（假扩展不会收到命令）。
-  ["browser_help", null, {},
-    null, ["browser_click", "browser_help", "browser_cdp"]],
   // 原生 CDP 透传：结果是一段 JSON 字符串 + 真实大小；模型必须看到方法与那段 JSON。
   ["browser_cdp", "cdp.call", { method: "Page.captureSnapshot" },
     { tabId: 3, method: "Page.captureSnapshot", json: "{\"data\":\"CDP-GT\"}", bytes: 16, truncated: false },
@@ -361,11 +358,11 @@ const GROUND_TRUTH = [
 
 // 封闭 schema 的工具里，任何 null 都会打穿调用：宿主 checkValue 只对 undefined 放行
 // （`!Object.hasOwn(value,key) || value[key] === void 0` 才 continue），null 会下钻判类型。
-// 所以这 11 条的 value 里出现 null 就是必然失败，而不是「字段没填」。
+// 所以这 12 条的 value 里出现 null 就是必然失败，而不是「字段没填」。
 const CLOSED_SCHEMA = new Set([
   "browser_navigate", "browser_read", "browser_snapshot", "browser_evaluate", "browser_screenshot",
   "browser_cleanup", "browser_console_log", "browser_network_log", "browser_network_clear",
-  "browser_pdf", "browser_emulate", "browser_help", "browser_cdp",
+  "browser_pdf", "browser_emulate", "browser_cdp",
 ]);
 const hasNull = (v) => v === null
   || (typeof v === "object" && v !== null && Object.values(v).some(hasNull));

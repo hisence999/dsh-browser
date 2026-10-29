@@ -76,7 +76,7 @@ To change the port / token / turn the default off, configure `- id: browser-brid
 
 Once installed, just talk in natural language — the agent picks the tools. A few things worth knowing up front:
 
-**Settings page**: on dsh 0.1.7+ / 0.2.x, "Settings → 浏览器控制" (Browser Control) shows the link status, the switches (read-only, script execution, lazy docs, raw CDP, isolated instance, group name, AI highlight, tab placement, focus policy, user takeover) and a cleanup button for screenshots and scratch files.
+**Settings page**: on dsh 0.1.7+ / 0.2.x, "Settings → 浏览器控制" (Browser Control) shows the link status, the switches (read-only, script execution, lazy tools, raw CDP, isolated instance, group name, AI highlight, tab placement, focus policy, user takeover) and a cleanup button for screenshots and scratch files.
 
 **What the AI's tabs look like**: tabs it opens are collected into a blue tab group (name `DSH` by default and configurable; empty = no group; a single call may override it with `groupTitle`). Ownership is tracked by **group id**, never by name — a group of yours with the same name is never taken over. It only closes tabs it opened; closing yours requires an explicit `force`.
 
@@ -143,9 +143,9 @@ Chrome browser
 | `browser_cdp` | Raw CDP passthrough (`method: "Domain.method"`) |
 | `browser_info` | Report the browser and extension version actually connected (run this first when debugging) |
 | `browser_cleanup` | Delete screenshots and scratch files |
-| `browser_help` | Look up tool usage: omit `tool` for the catalog, pass a name for the full description and parameter table |
+| `browser_tools` | Loader: appears only in lazy mode; give it tool names, a group name, or `"*"` to load them |
 
-24 tools in total. `verify/verify_surface.mjs` reconciles this surface against the extension's command table; drift makes `npm run verify` fail.
+23 tools in total. Fully open by default: all 23 are registered for the model; turning on "lazy tools" leaves only `browser_tools` exposed, and it loads the rest on demand (each loaded definition is byte-identical to the eager one). `verify/verify_surface.mjs` reconciles this surface against the extension's command table; drift makes `npm run verify` fail.
 
 ## License
 

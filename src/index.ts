@@ -29,7 +29,7 @@ import { BridgeServer, cleanupArtifacts } from './server.ts'
 import { BridgeError, classify } from './errors.ts'
 import { policyRefusal } from './policy.ts'
 import { buildSettingsRoute, TAB_GROUP_TITLE_MAX } from './settings-routes.ts'
-import { LAZY_DESCRIPTION, helpParameters, summarize, type HelpTool } from './tool-help.ts'
+import { TOOL_GROUPS, groupOf, summarize } from './tool-help.ts'
 
 // Re-exported so the policy tables stay testable from the published bundle
 // (verify/verify_policy.mjs reconciles them against the extension's COMMANDS).
@@ -96,10 +96,12 @@ export interface Config {
 	 */
 	allowScript?: boolean
 	/**
-	 * Load tool descriptions on demand instead of shipping all of them in every
-	 * request. On: each `browser_*` schema carries a one-line stub and
-	 * `browser_help` returns the full description/parameter table for a name.
-	 * Off by default, so the first-run experience is unchanged.
+	 * 工具懒启动：只在模型面前暴露一个 `browser_tools`，其余工具由它按需装载。
+	 *
+	 * 打开后每次请求的工具块从「全部工具的完整描述」缩成「一个工具 + 它的完整描述」；
+	 * 装载过的工具**拿到的仍是完整描述**，没有任何降级——这个开关改变的是「暴不暴露」，
+	 * 不是「描述多长」。键名沿用历史的 `lazyToolDocs`，因为它已经写进了用户的 profile
+	 * 覆盖层，改名会让老配置被 zod 静默丢掉、开关自己回到默认值。
 	 */
 	lazyToolDocs?: boolean
 	/**
@@ -649,30 +651,41 @@ async function savePdf(
 
 /** Options the model-facing tool surface depends on; both come from the resolved config. */
 interface BrowserToolOptions {
-	/** Register one-line descriptions and serve the full text from `browser_help`. */
-	lazyDocs: boolean
+	/** 懒启动：只暴露 `browser_tools`，其余工具由它按需装载（装上后是完整描述）。 */
+	lazyTools: boolean
 	/** Register `browser_cdp` (raw CDP passthrough). */
 	allowRawCdp: boolean
 }
 
 /** Register every `browser_*` tool; each is a thin adapter over one extension command. */
 function applyBrowserTools(ctx: Context, controller: BridgeController, options: BrowserToolOptions): void {
-	/** Full definitions by name — what `browser_help` reads, stubs or not. */
-	const definitions = new Map<string, HelpTool>()
+	type ToolDefinition = Parameters<typeof ctx.tools.register>[0]
+	/** 全量定义，**包括还没暴露出去的** —— 懒启动时就是从这里取，描述一个字不改。 */
+	const known = new Map<string, ToolDefinition>()
+	/** 已经暴露给模型的工具名。`browser_tools` 自己不在这张表里（它不是可调用的能力）。 */
+	const exposed = new Set<string>()
+
 	/**
-	 * Register one definition, remembering its full text first. In lazy mode the
-	 * model gets {@link LAZY_DESCRIPTION} instead; the parameter schema is
-	 * untouched, so every tool stays directly callable.
+	 * 真的交给宿主注册。
+	 *
+	 * 幂等：同一个工具重复装载只是返回 false，不会注册第二遍。
 	 */
-	const mount = (definition: Parameters<typeof ctx.tools.register>[0]): void => {
-		definitions.set(definition.name, {
-			name: definition.name,
-			description: definition.description,
-			parameters: definition.parameters as Record<string, unknown>,
-		})
-		ctx.tools.register(options.lazyDocs && definition.name !== 'browser_help'
-			? { ...definition, description: LAZY_DESCRIPTION }
-			: definition)
+	const expose = (name: string): boolean => {
+		if (exposed.has(name)) return false
+		const definition = known.get(name)
+		if (definition === undefined) return false
+		ctx.tools.register(definition)
+		exposed.add(name)
+		return true
+	}
+
+	/**
+	 * 登记一个工具的定义。全开：当场暴露；懒启动：只记账，等 `browser_tools` 来取。
+	 * 两种模式下存的都是同一份完整定义 —— 这里没有「桩描述」这种东西。
+	 */
+	const mount = (definition: ToolDefinition): void => {
+		known.set(definition.name, definition)
+		if (!options.lazyTools) expose(definition.name)
 	}
 
 	// 提示词里那两句默认目标与让出，是「模型自己就能做对」的关键：工具结果里当然也写着
@@ -707,9 +720,6 @@ function applyBrowserTools(ctx: Context, controller: BridgeController, options: 
 		+ 'marked "[renderedTruncated omittedChars=N limitChars=L]" — re-issue a narrower query '
 		+ '(smaller limit, a pattern filter, or browser_read\'s offset) instead of assuming the '
 		+ 'page is shorter than it is.'
-		+ (options.lazyDocs
-			? ' Tool descriptions are deferred: call browser_help with a tool name for its full usage and parameters before using that tool.'
-			: '')
 	ctx.systemPrompt.section({
 		name: 'tool:browser',
 		order: 112,
@@ -1683,103 +1693,119 @@ function applyBrowserTools(ctx: Context, controller: BridgeController, options: 
 		},
 	}))
 
-	// The catalog/`help` pair is registered last so it can describe every tool
-	// above it. In eager mode it is still useful as a one-stop parameter
-	// reference; in lazy mode it is the only place the real descriptions exist.
-	mount(defineTool({
-		name: 'browser_help',
-		description: 'Look up browser tool usage. Omit `tool` for the catalog (one line per tool); pass an exact tool name for its full description and parameter table. Use it before calling a browser tool whose description was deferred.',
-		parameters: {
-			tool: { type: 'string', description: 'Exact tool name, e.g. "browser_click". Omit to list every browser tool.' },
-		},
-		output: {
-			schema: {
-				type: 'object',
-				additionalProperties: false,
-				properties: {
-					count: { type: 'number', required: true },
-					tools: {
-						type: 'array',
-						items: {
-							type: 'object',
-							additionalProperties: false,
-							properties: {
-								name: { type: 'string', required: true },
-								summary: { type: 'string', required: true },
-							},
-						},
-					},
-					tool: {
-						type: 'object',
-						additionalProperties: false,
-						properties: {
-							name: { type: 'string', required: true },
-							description: { type: 'string', required: true },
-							parameters: {
-								type: 'array',
-								required: true,
-								items: {
-									type: 'object',
-									additionalProperties: false,
-									properties: {
-										name: { type: 'string', required: true },
-										type: { type: 'string', required: true },
-										required: { type: 'boolean', required: true },
-										description: { type: 'string' },
-										enumValues: { type: 'array', items: { type: 'string' } },
-										default: { type: 'string' },
-									},
+	// 懒启动：模型面前**只有**这一个工具，它先报目录、再按需装载。装上的工具拿到的
+	// 就是完整描述，所以这里不需要、也不提供「查描述」的第二个入口。
+	if (options.lazyTools) {
+		/** 分组说明从 TOOL_GROUPS 现算，描述不可能是另一张手写表。 */
+		const groupLine = Object.entries(TOOL_GROUPS)
+			.map(([group, names]) => `"${group}" = ${names.join(', ')}`)
+			.join('; ')
+		const groupNamesOf = (key: string): readonly string[] | undefined =>
+			Object.prototype.hasOwnProperty.call(TOOL_GROUPS, key) ? TOOL_GROUPS[key] : undefined
+		ctx.tools.register(defineTool({
+			name: 'browser_tools',
+			description: 'Load browser tools. The browser_* family drives the user\'s real, logged-in browser '
+				+ 'through the DSH Browser extension, but lazy startup is on: this is the ONLY browser tool '
+				+ 'exposed, and a tool that is not loaded cannot be called at all. Load what you need first — it '
+				+ 'then behaves like any other tool, full description and parameters included, from your next '
+				+ 'step on. Call with no `names` to list everything loadable. Call with `names` to load: exact '
+				+ 'tool names ("browser_click"), a group name, or "*" for all of them. '
+				+ `Groups: ${groupLine}. `
+				+ 'Load everything you need in ONE call: each load changes the tool list, so batching beats '
+				+ 'loading one tool at a time.',
+			parameters: {
+				names: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'What to load: exact tool names, group names ("read", "write", "tabs", "capture", "raw"), or "*" for everything. Omit to list what can be loaded.',
+				},
+			},
+			output: {
+				schema: {
+					type: 'object',
+					additionalProperties: false,
+					properties: {
+						exposed: { type: 'array', items: { type: 'string' }, required: true },
+						activated: { type: 'array', items: { type: 'string' }, required: true },
+						already: { type: 'array', items: { type: 'string' }, required: true },
+						unknown: { type: 'array', items: { type: 'string' }, required: true },
+						available: {
+							type: 'array',
+							items: {
+								type: 'object',
+								additionalProperties: false,
+								properties: {
+									name: { type: 'string', required: true },
+									group: { type: 'string', required: true },
+									summary: { type: 'string', required: true },
 								},
 							},
 						},
 					},
 				},
-			},
-			render: (_args, value) => {
-				if (value.tool !== undefined) {
-					const tool = value.tool
-					const lines = [`${tool.name}: ${tool.description}`, '']
-					if (tool.parameters.length === 0) {
-						lines.push('Parameters: none')
-					} else {
-						lines.push('Parameters:')
-						for (const parameter of tool.parameters) {
-							let line = `- ${parameter.name} (${parameter.type}, ${parameter.required ? 'required' : 'optional'})`
-							if (parameter.description !== undefined) line += `: ${parameter.description}`
-							if (parameter.enumValues !== undefined) line += ` [one of: ${parameter.enumValues.join(', ')}]`
-							if (parameter.default !== undefined) line += ` [default: ${parameter.default}]`
-							lines.push(line)
-						}
+				render: (_args, value) => {
+					if (value.available !== undefined) {
+						const loaded = value.exposed.length === 0 ? 'nothing yet' : value.exposed.join(', ')
+						const lines = [
+							`Loaded: ${loaded}. Loadable (${value.available.length}):`,
+							...value.available.map(row => `- ${row.name} [${row.group}] — ${row.summary}`),
+							'Load with browser_tools {names: [...]} — exact names, a group name, or "*".',
+						]
+						return [{ type: 'text', text: clampRendered(lines.join('\n')) }]
 					}
+					const lines: string[] = []
+					if (value.activated.length > 0) lines.push(`Loaded, callable now: ${value.activated.join(', ')}`)
+					if (value.already.length > 0) lines.push(`Already loaded: ${value.already.join(', ')}`)
+					if (value.unknown.length > 0) {
+						lines.push(`Unknown, nothing loaded for these: ${value.unknown.join(', ')} — call browser_tools with no names to see the exact tool names.`)
+					}
+					if (lines.length === 0) lines.push('Nothing loaded: pass names, a group name, or "*".')
 					return [{ type: 'text', text: clampRendered(lines.join('\n')) }]
-				}
-				const rows = value.tools ?? []
-				const head = `${value.count} browser tools. Descriptions load on demand — pass a name to browser_help for full usage:`
-				return [{
-					type: 'text',
-					text: clampRendered([head, ...rows.map(row => `- ${row.name} — ${row.summary}`)].join('\n')),
-				}]
+				},
 			},
-		},
-		presentCall: args => ({ card: 'generic', title: args.tool ? `Browser help: ${args.tool}` : 'Browser tool catalog', kind: 'other' as const }),
-		async execute(args) {
-			const catalog = [...definitions.values()]
-				.map(entry => ({ name: entry.name, summary: summarize(entry.description) }))
-				.sort((a, b) => a.name.localeCompare(b.name))
-			if (typeof args.tool !== 'string' || args.tool.trim().length === 0) {
-				return { count: catalog.length, tools: catalog }
-			}
-			const requested = args.tool.trim()
-			const entry = definitions.get(requested)
-			if (entry === undefined) {
-				throw new Error(`unknown browser tool: ${requested}. Available: ${catalog.map(item => item.name).join(', ')}`)
-			}
-			return {
-				count: catalog.length,
-				tool: { name: entry.name, description: entry.description, parameters: helpParameters(entry) },
-			}
-		},
-	}))
+			presentCall: () => ({ card: 'generic', title: 'Load browser tools', kind: 'other' as const }),
+			async execute(args) {
+				const requested = (Array.isArray(args.names) ? args.names : [])
+					.map(item => (typeof item === 'string' ? item.trim() : ''))
+					.filter(item => item.length > 0)
+				if (requested.length === 0) {
+					const available = [...known.keys()]
+						.filter(name => !exposed.has(name))
+						.map(name => ({
+							name,
+							group: groupOf(name) ?? 'other',
+							summary: summarize(known.get(name)?.description ?? ''),
+						}))
+						.sort((left, right) => left.name.localeCompare(right.name))
+					return { exposed: [...exposed].sort(), activated: [], already: [], unknown: [], available }
+				}
+				const wanted = new Set<string>()
+				const unknown: string[] = []
+				for (const item of requested) {
+					if (item === '*') {
+						for (const name of known.keys()) wanted.add(name)
+						continue
+					}
+					const fromGroup = groupNamesOf(item.toLowerCase())
+					if (fromGroup !== undefined) {
+						for (const name of fromGroup) if (known.has(name)) wanted.add(name)
+						continue
+					}
+					if (known.has(item)) wanted.add(item)
+					else unknown.push(item)
+				}
+				const activated: string[] = []
+				const already: string[] = []
+				for (const name of wanted) (expose(name) ? activated : already).push(name)
+				return {
+					exposed: [...exposed].sort(),
+					activated: activated.sort(),
+					already: already.sort(),
+					unknown,
+				}
+			},
+		}))
+	}
 
 	// Raw CDP passthrough. Registered only while the config allows it, so the
 	// model surface never advertises a capability the gate would refuse anyway.
@@ -1918,7 +1944,7 @@ export function apply(ctx: Context, config: Config): void {
 	})
 
 	applyBrowserTools(ctx, controller, {
-		lazyDocs: resolved.lazyToolDocs === true,
+		lazyTools: resolved.lazyToolDocs === true,
 		allowRawCdp: resolved.allowRawCdp !== false,
 	})
 	mountSettingsRoute(ctx, controller, current)

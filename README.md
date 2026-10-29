@@ -143,9 +143,9 @@ Chrome 浏览器
 | `browser_cdp` | 原生 CDP 透传（`method: "Domain.method"`） |
 | `browser_info` | 报告实际连上的浏览器与扩展版本（排障先跑它） |
 | `browser_cleanup` | 清理截图与临时文件 |
-| `browser_help` | 查工具用法：省略 `tool` 给目录，给名字给完整描述与参数表 |
+| `browser_tools` | 装载器：只在懒加载模式下出现，给它工具名、分组名或 `"*"` 把工具装上 |
 
-共 24 个工具。工具面与扩展命令表的一致性由 `verify/verify_surface.mjs` 对账，漂移会让 `npm run verify` 失败。
+共 23 个工具。默认全开：23 个全部注册给模型；打开「工具懒加载」后只留 `browser_tools` 一个装载器，由它按需把其余工具装进来（装上的定义与全开时逐字节一致）。工具面与扩展命令表的一致性由 `verify/verify_surface.mjs` 对账，漂移会让 `npm run verify` 失败。
 
 ## 许可证 · License
 

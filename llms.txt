@@ -30,7 +30,7 @@ Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱�
 - 所有 HTTP 响应都不带 `Access-Control-Allow-Origin`
 - `/` 与 `/api/status` 免鉴权，只报链路状态
 - 两个本机策略开关（profile 的 `browser-bridge` 配置）：`readOnly: true` 拒绝一切会改变页面/浏览器状态或删本机文件的命令，`allowScript: false` 单独关掉 `browser_evaluate` 与 `browser_cdp`（两者都能在页面里执行任意脚本）。闸门在把命令发给扩展**之前**，所以被拒的调用零副作用；它们只约束模型那条工具面，HTTP 面按同一 token 走、不受影响，也**不是**防有权限的人
-- `lazyToolDocs: true` 只改工具描述（换成一行短桩），完整用法由 `browser_help` 按需返回；参数 schema 不变，不是安全边界
+- `lazyToolDocs: true` 只决定**暴不暴露**：全开时 23 个工具全注册；打开后只为模型保留一个 `browser_tools` 装载器，由它按需把工具注册进来。装上的工具拿到的就是它完整的描述与参数 schema（与全开时逐字节相同，不存在桩描述）。省的是每轮固定的工具块体积，不是安全边界
 - `allowRawCdp`（默认 true）控制是否注册 `browser_cdp`：原生 CDP 透传，受 `readOnly` / `allowScript` 约束，结果 20 000 字符截断并报真实大小
 - 扩展弹窗里的「锁定」是另一层：只有人工通道能开与关，冻结期间命令在扩展的 `runCommand` 入口就被拒绝（连接保持），读不出锁状态时按冻结处理（fail-closed）
 - `browser_hold`（接管浮层）是**软层**：它告诉用户模型在操作这一页并挡住误触，用户双击即可关掉；卡片上按「中止操作」后扩展拒绝 `click`/`input`/`press`/`nav`，但模型可以调 `hold action=off` 解除。它不是安全边界，也不是防逃逸手段——要冻住浏览器用扩展弹窗里的「锁定」
@@ -66,9 +66,9 @@ Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱�
 
 ## 关键文件
 
-- `src/index.ts` - 24 个 `browser_*` 工具注册（含 `browser_help` / `browser_cdp` / `browser_profile`）+ settings 接线的版本兼容分支
+- `src/index.ts` - 23 个 `browser_*` 工具注册（含 `browser_cdp` / `browser_profile`；懒加载模式下换成唯一入口 `browser_tools`）+ settings 接线的版本兼容分支
 - `src/settings-routes.ts` - 设置页同源 JSON 面 `/browser-control/api`（Host 回环/Origin 信任栅栏 + `configEditor` 持久化）
-- `src/tool-help.ts` - 懒加载短桩与 `browser_help` 的参数归一化（文档来自注册定义本身）
+- `src/tool-help.ts` - `TOOL_GROUPS` 分组表（装载器的发现入口，与注册表对账）+ `groupOf` / `summarize`；不再有桩描述
 - `src/policy.ts` - 三张互不相同的表：只读白名单、脚本命令（`eval` / `cdp.call`）、插件本地破坏性命令（`browser_cleanup` 不经过 `execute()`，必须自己站闸门）
 - `client.js` - 设置页「浏览器控制」页面：链路状态（含无痕权限）、四个闸门开关、`allowIncognito` 开关、三个目标/接管下拉（`tabWindow` / `focusPolicy` / `userTakeover`）、`tabGroupTitle` 与 `agentHighlight`（v1.1.4，这一版把排版收紧：状态一屏看完、说明文字进悬停提示）、清理/状态页动作
 - `src/server.ts` - WebSocket 服务 + HTTP 面（鉴权、来源校验、状态页）

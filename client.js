@@ -163,7 +163,7 @@ window.__ModuleLoader__.load({
     const HINTS = {
       readOnly: '拒绝一切会改变页面或浏览器状态的命令（点击/输入/按键/导航/滚动/标签页/视口/浮层），只留读页面与读日志。',
       allowScript: '关闭后 browser_evaluate 与 browser_cdp 都会被拒绝（两者都能在页面里执行任意脚本），点击与读取不受影响。',
-      lazyToolDocs: '每个工具只暴露一行短说明与完整参数，完整用法由 browser_help 按需查询——省下每次请求的固定 token。',
+      lazyToolDocs: '默认关。打开后每轮请求只出现一个 browser_tools：先调它装载要用的工具（可给工具名、分组名，或 "*" 全装），装上的工具立刻是它完整描述与完整参数，跟关着的时候一模一样。省下的是每轮固定那两万字符的工具块；关着就是全部工具一步到位，不需要先装载。',
       allowRawCdp: '注册 browser_cdp（任意 Domain.method 透传）；关闭后这个工具不出现。安全边界仍然是只读档与脚本开关。',
       allowIncognito: '默认关。打开后模型才能用 browser_profile 开无痕罐；还需要去浏览器扩展管理页打开本扩展的「在无痕 / InPrivate 中允许」——那是浏览器那层的权限，本页改不了。',
       agentHighlight: 'AI 正在操作的那一页会带一圈蓝色渐变框，你接管时变琥珀色；它不拦任何操作，也挡不住任何命令。关掉后只剩命令结果，页面上没有视觉提示。随每条命令下发，改完下一条命令就生效。',
@@ -408,10 +408,10 @@ window.__ModuleLoader__.load({
               onChange: next => patch('allowScript', `脚本执行已${next ? '开启' : '关闭'}`, next),
             }),
             h(ToggleRow, {
-              configKey: 'lazyToolDocs', title: '工具描述懒加载', hint: HINTS.lazyToolDocs,
+              configKey: 'lazyToolDocs', title: '工具懒加载', hint: HINTS.lazyToolDocs,
               checked: boolOf(config, 'lazyToolDocs', false),
               busy: busy === 'lazyToolDocs',
-              onChange: next => patch('lazyToolDocs', `工具描述懒加载已${next ? '开启' : '关闭'}`, next),
+              onChange: next => patch('lazyToolDocs', `工具懒加载已${next ? '开启' : '关闭'}`, next),
             }),
             h(ToggleRow, {
               configKey: 'allowRawCdp', title: '原生 CDP', hint: HINTS.allowRawCdp,

@@ -59,10 +59,12 @@ export interface Config {
      */
     allowScript?: boolean;
     /**
-     * Load tool descriptions on demand instead of shipping all of them in every
-     * request. On: each `browser_*` schema carries a one-line stub and
-     * `browser_help` returns the full description/parameter table for a name.
-     * Off by default, so the first-run experience is unchanged.
+     * 工具懒启动：只在模型面前暴露一个 `browser_tools`，其余工具由它按需装载。
+     *
+     * 打开后每次请求的工具块从「全部工具的完整描述」缩成「一个工具 + 它的完整描述」；
+     * 装载过的工具**拿到的仍是完整描述**，没有任何降级——这个开关改变的是「暴不暴露」，
+     * 不是「描述多长」。键名沿用历史的 `lazyToolDocs`，因为它已经写进了用户的 profile
+     * 覆盖层，改名会让老配置被 zod 静默丢掉、开关自己回到默认值。
      */
     lazyToolDocs?: boolean;
     /**

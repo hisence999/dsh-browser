@@ -48,8 +48,13 @@ const unexposed = [...extCommands].filter((c) => !pluginCommands.has(c) && !INTE
 check("扩展没有「实现了但 agent 拿不到」的命令", unexposed.length === 0, unexposed.length ? unexposed.join(", ") : "全部已暴露");
 
 // 4) 源码工具 ↔ 构建产物
+//    `browser_tools` 是懒启动模式的装载器：它确实是注册定义（所以必须出现在构建产物里），
+//    但**不是一条能力**——它没有对应的扩展命令（它只读注册表）。所以「能力数」把它减掉，
+//    而「文档覆盖 / 是否虚构」这两类检查仍用全集（README 的工具表里确实列了它）。
+const LAZY_LOADER = "browser_tools";
 const srcTools = new Set([...src.matchAll(/name: '(browser_[a-z_]+)'/g)].map((m) => m[1]));
 const libTools = new Set([...lib.matchAll(/name: "(browser_[a-z_]+)"/g)].map((m) => m[1]));
+const capabilities = new Set([...srcTools].filter((t) => t !== LAZY_LOADER));
 const stale = [...srcTools].filter((t) => !libTools.has(t));
 check("构建产物与源码工具一致", stale.length === 0, stale.length ? `lib/ 缺：${stale.join(", ")}` : `${srcTools.size} 个一致`);
 
@@ -75,9 +80,9 @@ const llmsTools = new Set([...llms.matchAll(/\`(browser_[a-z_]+)\`/g)].map((m) =
 const llmsBad = [...llmsTools].filter((t) => !srcTools.has(t));
 check("llms.txt 没有指向不存在的工具", llmsBad.length === 0, llmsBad.length ? llmsBad.join(", ") : `提到 ${llmsTools.size} 个`);
 const claimed = [...llms.matchAll(/(\d+)\s*个\s?\`?browser_\*`?/g)].map((m) => Number(m[1]));
-const countWrong = claimed.filter((c) => c !== srcTools.size);
+const countWrong = claimed.filter((c) => c !== capabilities.size);
 check("llms.txt 写的工具数量与源码一致", claimed.length === 0 ? true : countWrong.length === 0,
-  claimed.length ? `写的是 ${claimed.join("/")}，实际 ${srcTools.size}` : "没写数量");
+  claimed.length ? `写的是 ${claimed.join("/")}，实际能力 ${capabilities.size}（不含装载器 ${LAZY_LOADER}）` : "没写数量");
 
 console.log(`\n结论：${fails === 0 ? "三层一致" : fails + " 项不一致"}`);
 process.exit(fails === 0 ? 0 : 1);

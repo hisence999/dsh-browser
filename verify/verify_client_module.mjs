@@ -219,7 +219,7 @@ function renderWith(snapshot) {
   // 重排之后标题与字段名是分开的两段（中文标签 + 小号字段名），所以分开断言：
   // 中文标签是给人读的，字段名是给人拿去改 cordis.patch.yml 的，两个都不能丢。
   check('五个闸门开关的标签与字段名都在',
-    ['只读档', '脚本执行', '工具描述懒加载', '原生 CDP', '隔离实例'].every(label => flat.includes(label))
+    ['只读档', '脚本执行', '工具懒加载', '原生 CDP', '隔离实例'].every(label => flat.includes(label))
       && ['readOnly', 'allowScript', 'lazyToolDocs', 'allowRawCdp', 'allowIncognito'].every(key => flat.includes(key)))
   check('三个枚举设置的标签与字段名都在',
     ['标签页打开位置', '聚焦策略', '用户接管'].every(label => flat.includes(label))

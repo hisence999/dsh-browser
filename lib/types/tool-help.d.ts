@@ -1,40 +1,18 @@
 /**
- * Model-facing documentation for the deferred (`lazyToolDocs`) tool surface.
+ * 工具懒启动（`lazyToolDocs: true`）时，模型唯一看得见的工具是 `browser_tools`。
  *
- * The tool definitions themselves stay the single source of truth: `browser_help`
- * is rendered from the exact definitions `applyBrowserTools()` registered, not
- * from a second hand-maintained table. That is deliberate — this repository has
- * already paid once for "the docs describe a tool that does not exist / the code
- * has a tool the docs never mention". A separate table would rebuild the same
- * drift under a new name.
+ * 全开模式下这个模块只提供 `summarize`（目录里的一行简介）；懒启动模式下
+ * {@link TOOL_GROUPS} 是模型**唯一的发现入口**：它必须能从 `browser_tools` 的描述里
+ * 读出「有哪些工具、怎么一次装齐」。所以这张分组表不许和工具清单漂移 ——
+ * `verify/verify_tool_docs.mjs` 断言它恰好覆盖每一个注册工具一次，「新加了工具忘了
+ * 归组」会当场把验台判红。
  *
- * `defineTool` converts its parameter DSL into JSON Schema (`{type:'object',
- * properties:{…}, required:[…]}`); this module reads that shape and, as a
- * fallback, the raw DSL shape, so the helper keeps working if that conversion
- * ever moves.
+ * 这里**没有**「描述桩」：懒启动改变的是「暴不暴露」，不是「描述多长」。装上的工具
+ * 拿到的就是它自己的完整描述，一个字都不换。
  */
-/** One-line description the model sees in lazy mode instead of the real prose. */
-export declare const LAZY_DESCRIPTION = "Usage is loaded on demand: call browser_help with this tool name.";
-/** The definition fields this module reads. Structural on purpose: the host package is a peer. */
-export interface HelpTool {
-    readonly name: string;
-    readonly description: string;
-    readonly parameters: Record<string, unknown>;
-}
-/** One documented parameter, already normalized for rendering. */
-export interface HelpParameter {
-    name: string;
-    type: string;
-    required: boolean;
-    description?: string;
-    enumValues?: string[];
-    default?: string;
-}
-/**
- * Normalize one tool's parameters into renderable rows.
- * @param tool - the registered definition (or the same shape from a wire schema).
- * @returns parameters in declaration order, `required` resolved from the schema.
- */
-export declare function helpParameters(tool: HelpTool): HelpParameter[];
+/** 分组 → 工具全名。**每个工具恰好属于一个分组**（验台钉着「恰好一次」）。 */
+export declare const TOOL_GROUPS: Readonly<Record<string, readonly string[]>>;
+/** 反查：工具属于哪个分组；不在表里返回 `undefined`（验台保证不会发生）。 */
+export declare function groupOf(name: string): string | undefined;
 /** First sentence (or a bounded prefix) of a description, for the catalog. */
 export declare function summarize(description: string): string;
