@@ -1154,6 +1154,27 @@ async function claimTab(tabId, { own = true } = {}) {
 	return state
 }
 
+/**
+ * 写类命令（`click` / `input` / `press` / `nav` / `scroll`）实际落在哪一页，就把
+ * 「默认目标」和高亮框一起挪过去。
+ *
+ * 为什么要有这条：高亮框只跟 `claimTab`（open/group/activate），而写命令可以带一个
+ * 显式 `tabId` 指向别的页——那时框还停在旧目标上，屏幕上会写着「AI 正在操作」而那一页
+ * 其实一动不动（实测确认过）。读类命令刻意不跟随：`read`/`snapshot` 只是看一眼，
+ * 不该把默认目标带走。
+ *
+ * 只对**已经是 AI 的**标签页跟随：用户自己的页面画框要临时挂 debugger，会连带把它之后
+ * 的弹窗按 `dialogPolicy` 自动应答（见经验 #0021），为了一个装饰层不值当。
+ */
+async function followWriteTo(tabId) {
+	const id = Number(tabId)
+	if (!Number.isInteger(id)) return
+	const state = await syncAgentState()
+	if (state.target === id) return
+	if (state.tabs[id] === undefined) return
+	await claimTab(id, { own: false })
+}
+
 /** 忘了这些标签页的归属/让出/目标（关闭、拆组、被用户接管后释放时用）。 */
 async function forgetOwned(tabIds) {
 	const state = await syncAgentState()
@@ -3109,6 +3130,7 @@ async function cmdTabsActivate(params) {
 async function cmdNav(params) {
 	if (!params.url) throw new Error('params.url is required');
 	const tab = await resolveTab(params.tabId, policyOf(params).jar);
+	await followWriteTo(tab.id);
 	const timeoutMs = Number(params.timeoutMs) || 15_000;
 	// Arm the waiter BEFORE triggering the navigation — see
 	// waitForNavigationComplete for why the order decides the answer.
@@ -3346,6 +3368,7 @@ async function cmdFind(params) {
 async function cmdClick(params) {
 	if (!params.selector) throw new Error('params.selector is required');
 	const tab = await resolveTab(params.tabId, policyOf(params).jar);
+	await followWriteTo(tab.id);
 	// Mouse events land on whatever is under the viewport coordinates of the tab
 	// we drive. CDP injects them into the renderer, so the tab does NOT have to be
 	// frontmost; `focus` reports what we actually touched (see activateTabWindow).
@@ -3489,6 +3512,7 @@ async function cmdInput(params) {
 	if (!params.selector) throw new Error('params.selector is required');
 	if (params.value === undefined) throw new Error('params.value is required');
 	const tab = await resolveTab(params.tabId, policyOf(params).jar);
+	await followWriteTo(tab.id);
 	const policy = policyOf(params);
 	// 'type' mode drives the real keyboard pipeline (Input.insertText per
 	// keystroke) so stateful components (React-controlled, search bars with
@@ -3584,6 +3608,7 @@ async function cmdPress(params) {
 	const raw = String(params.key ?? '');
 	if (raw.length === 0) throw new Error('params.key is required');
 	const tab = await resolveTab(params.tabId, policyOf(params).jar);
+	await followWriteTo(tab.id);
 	const { key, modifiers: modifierNames } = parseKeySpec(raw, params.modifiers);
 	// Key events go through CDP; `focus` says whether we had to bring the tab
 	// forward to make them land (policy-dependent — see activateTabWindow).
@@ -3721,6 +3746,7 @@ async function cmdScreenshot(params) {
 
 async function cmdScroll(params) {
 	const tab = await resolveTab(params.tabId, policyOf(params).jar);
+	await followWriteTo(tab.id);
 	const dx = Number.isFinite(Number(params.x)) ? Number(params.x) : 0;
 	const dy = Number.isFinite(Number(params.y)) ? Number(params.y) : 0;
 	return withCDP(tab.id, (send) => send('Runtime.evaluate', {

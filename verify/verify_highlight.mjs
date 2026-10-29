@@ -10,7 +10,9 @@
 //   4. 页面导航完成 → 补画一次（导航会打掉注入的宿主）；桥断开 / 标签页关闭 / 拆组 → 收掉；
 //   5. 截图前隐藏、拍完还原 —— 否则每一张交给模型的截图都镶一圈蓝边；
 //   6. 它永远不拦事件（CSS 里 `pointer-events: none`），失败也永远不让命令失败（受限页面、
-//      注入抛错），徽标文案写死在扩展里（模型写不进一句系统口吻的话冒充提示）。
+//      注入抛错），徽标文案写死在扩展里（模型写不进一句系统口吻的话冒充提示）；
+//   7. 写命令（`click` / `input` / `press` / `nav` / `scroll`）落在哪一页，默认目标与框就
+//      跟到哪一页——只跟「已经是 AI 的」页，读命令不跟，被让出拦下的命令也不跟。
 //
 // 注意：策略（`policy.highlight`）与罐路由一样，是 `runCommand` 进门时记下的**当前策略**，
 // 所以这里的每条命令都走 `runCommand`——直接用 `ctx.cmdTabsOpen` 会绕开它，测出来的
@@ -20,6 +22,8 @@
 //   node verify/verify_highlight.mjs
 //   node verify/verify_highlight.mjs ../../old/background.js    # 对未实现版本判红
 import { runInContext, createContext } from "node:vm";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { bootBackground, makeModel } from "./ext_harness.mjs";
 
 const CANDIDATE = process.argv[2];
@@ -546,6 +550,142 @@ const takeOver = async (model, tabId) => {
   model.fireTabUpdated(opened.tabId, { status: "complete" });
   await tick();
   check("新 worker 也能补画（记录活过回收）", page.host !== null);
+}
+
+/* 15 —— 写类命令落在哪一页，默认目标与高亮框就跟到哪一页 */
+// 起因：框只跟「认领」动作（`tabs.open` / `group` / `activate`），而写命令可以带一个显式
+// `tabId` 指向**另一页 AI 标签页**——那时框停在旧目标上，屏幕上写着「AI 正在操作」而那一页
+// 其实一动不动（实测确认过）。
+//
+// 只跟**写**页面那五条（`click` / `input` / `press` / `nav` / `scroll`，恰好就是
+// `YIELD_BLOCKED_COMMANDS` 给「写操作」的定义）：读命令刻意不跟——看一眼不该把默认目标带走。
+// 也只跟**已经是 AI 的**页：给用户的页画框要临时挂 debugger，会连带把它之后的弹窗按
+// `dialogPolicy` 自动应答（经验 #0021），一个装饰层不值当。
+/** 这一条写命令**实际**打到了哪个标签页（看 CDP 日志，不看扩展自己的话）。 */
+const sentTo = (model, from, method, needle) => model.dbg.log.slice(from)
+  .filter((e) => e.method === method && String(e.params?.expression ?? JSON.stringify(e.params ?? {})).includes(needle));
+const scrollWrite = (ctx, tabId) => ctx.runCommand("scroll", { tabId, y: 10 });
+const scrollHits = (model, from) => sentTo(model, from, "Runtime.evaluate", "window.scrollBy");
+
+/**
+ * 这台假件上能跑出**成功路径**的两条写命令：`scroll` 走 `Runtime.evaluate`，`press` 走
+ * `Input.dispatchKeyEvent`——两条不同的派发路径各验一次，免得只钉住其中一条。
+ * 另外三条（`click` / `input` / `nav`）要真 DOM 与真导航，这里跑不出成功路径，由 15f
+ * 用「调用点必须在」的结构断言兜住。
+ */
+const WRITE_PROBES = [
+  { label: "scroll", run: scrollWrite, hits: scrollHits },
+  { label: "press", run: (ctx, tabId) => ctx.runCommand("press", { tabId, key: "Enter" }),
+    hits: (model, from) => sentTo(model, from, "Input.dispatchKeyEvent", "keyDown") },
+];
+
+for (const probe of WRITE_PROBES) {
+  const { model, ctx, page } = await boot();
+  const a = await tabIdOf(ctx);
+  const b = await tabIdOf(ctx);
+  const before = await ctx.syncAgentState();
+  check(`前提（${probe.label}）：框与默认目标都在后开的那页（b）上`,
+    before.highlight?.tabId === b && before.target === b, JSON.stringify({ hl: before.highlight?.tabId, target: before.target }));
+
+  const from = model.dbg.log.length;
+  await probe.run(ctx, a);
+  const sent = probe.hits(model, from);
+  check(`前提（${probe.label}）：命令本身落在显式指定的那一页（a）`,
+    sent.length >= 1 && sent[0].tabId === a, JSON.stringify(sent.map((e) => e.tabId)));
+
+  const after = await ctx.syncAgentState();
+  check(`${probe.label} 之后默认目标跟着挪到 a`, after.target === a, String(after.target));
+  check(`${probe.label} 之后高亮框也挪到 a（屏幕上不再指着 b 说『AI 正在操作』）`,
+    after.highlight?.tabId === a, JSON.stringify(after.highlight));
+  check(`挪过去之后页面上仍然只有一层框（${probe.label}）`,
+    page.children.length === 1, String(page.children.length));
+}
+
+/* 15a —— 不只是记了一笔：紧接着一条不带 tabId 的写命令要落在新目标上 */
+{
+  const { model, ctx } = await boot();
+  const a = await tabIdOf(ctx);
+  await tabIdOf(ctx); // b：最后开的那页才是当前目标
+  await scrollWrite(ctx, a);
+  const from = model.dbg.log.length;
+  await ctx.runCommand("scroll", { y: 10 }); // 不带 tabId
+  const landed = scrollHits(model, from);
+  check("跟随之后，一条不带 tabId 的写命令落在 a 上（默认目标是真的换了）",
+    landed.length === 1 && landed[0].tabId === a, JSON.stringify(landed.map((e) => e.tabId)));
+}
+
+/* 15b —— 目标已经是它时，不重复画一遍（跟随是幂等的，不该每次多注一次框） */
+{
+  const { ctx, page } = await boot();
+  const a = await tabIdOf(ctx);
+  const injected = page.payloads.length;
+  await scrollWrite(ctx, a);
+  check("目标已经是它时不再重画（一次多余注入都没有）",
+    page.payloads.length === injected, `${page.payloads.length - injected} 次注入`);
+}
+
+/* 15c —— 写命令打在**用户的**页上：不跟随、不画框、不为装饰层挂 debugger */
+{
+  const { model, ctx } = await boot();
+  const a = await tabIdOf(ctx);
+  const userTab = model.addTab(1, "https://user.test/");
+  const attaches = model.dbg.attachCount;
+
+  const from = model.dbg.log.length;
+  await scrollWrite(ctx, userTab);
+  const sent = scrollHits(model, from);
+  check("前提：写命令确实打到了用户的页", sent.length === 1 && sent[0].tabId === userTab, JSON.stringify(sent.map((e) => e.tabId)));
+  check("也不为装饰层额外挂一次 debugger（只付命令自己那一次附着）",
+    model.dbg.attachCount === attaches + 1, `${attaches} -> ${model.dbg.attachCount}`);
+
+  const after = await ctx.syncAgentState();
+  check("用户的页不画框、默认目标也不挪（框只画在 AI 自己的页上）",
+    after.target === a && after.highlight?.tabId === a, JSON.stringify({ target: after.target, hl: after.highlight?.tabId }));
+  check("用户页也没有被悄悄认领成 AI 的", after.tabs[userTab] === undefined, JSON.stringify(Object.keys(after.tabs)));
+}
+
+/* 15d —— 读命令不跟随：看一眼不该把默认目标带走 */
+{
+  const { ctx } = await boot();
+  const a = await tabIdOf(ctx);
+  const b = await tabIdOf(ctx);
+  await ctx.runCommand("console.log", { tabId: a });
+  const after = await ctx.syncAgentState();
+  check("读命令（console.log）看完别的页之后，默认目标与框都还在 b 上",
+    after.target === b && after.highlight?.tabId === b, JSON.stringify({ target: after.target, hl: after.highlight?.tabId }));
+}
+
+/* 15e —— 被让出拦下的写命令不许挪框：拦截在跟随之前，零副作用里也包括视觉层 */
+{
+  const { model, ctx } = await boot();
+  const a = await tabIdOf(ctx);
+  const b = await tabIdOf(ctx);
+  await takeOver(model, a);
+  let refused = null;
+  try { await scrollWrite(ctx, a) } catch (error) { refused = String(error?.message ?? error); }
+  check("前提：被让出的页上写命令被拦下", refused !== null && refused.includes("用户已经接管"), String(refused).slice(0, 40));
+  const after = await ctx.syncAgentState();
+  check("被拒的命令不许把默认目标与框挪过去（拦在跟随之前）",
+    after.target === b && after.highlight?.tabId === b, JSON.stringify({ target: after.target, hl: after.highlight?.tabId }));
+}
+
+/* 15f —— 剩下三条写命令（`click` / `input` / `nav`）在这台假件里跑不出成功路径
+ *（要真 DOM 与真导航），但「少打一行就退回旧缺陷」这件事必须有人守。所以这几条读源码定位：
+ * 它守的不是实现细节，而是「写类命令一个都不许漏」这条契约本身。 */
+{
+  const sourceText = readFileSync(
+    CANDIDATE ?? fileURLToPath(new URL("../extension/background.js", import.meta.url)), "utf8");
+  const handlerBody = (name) => {
+    const at = sourceText.indexOf(`async function ${name}(`);
+    if (at < 0) return "";
+    const end = sourceText.indexOf("\nasync function ", at + 1);
+    return sourceText.slice(at, end < 0 ? undefined : end);
+  };
+  for (const name of ["cmdClick", "cmdInput", "cmdPress", "cmdNav", "cmdScroll"]) {
+    const body = handlerBody(name);
+    check(`${name} 里调了 followWriteTo`, /await followWriteTo\(tab\.id\)/.test(body),
+      body.length === 0 ? "找不到这个处理函数" : "只有 " + body.split("\n").length + " 行");
+  }
 }
 
 console.log(fails === 0
