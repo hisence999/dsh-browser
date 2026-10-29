@@ -42,7 +42,7 @@ It is a `position: fixed`, `pointer-events: none` **decoration only**: it interc
 
 Either channel works:
 
-- **Private report (preferred)**: GitHub Security Advisories (<https://github.com/hisence999/dsh-browser-control/security/advisories/new>)
-- **Public issue**: fine for problems without exploitable details (no concrete attack steps, no token-bypass methods) — open it at <https://github.com/hisence999/dsh-browser-control/issues>
+- **Private report (preferred)**: GitHub Security Advisories (<https://github.com/hisence999/dsh-browser/security/advisories/new>)
+- **Public issue**: fine for problems without exploitable details (no concrete attack steps, no token-bypass methods) — open it at <https://github.com/hisence999/dsh-browser/issues>
 
 For anything exploitable, please use the private channel so it is not abused before a fix ships.

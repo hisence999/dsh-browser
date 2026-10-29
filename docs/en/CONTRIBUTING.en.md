@@ -20,7 +20,7 @@ npm run verify    # the harnesses under verify/, binds 127.0.0.1:9777
 Extension-only changes do not touch `lib/`. Doc-only changes may skip both, but if you change a download link, audit it:
 
 ```bash
-curl -s "https://api.github.com/repos/hisence999/dsh-browser-control/releases?per_page=100" -o /tmp/releases.json
+curl -s "https://api.github.com/repos/hisence999/dsh-browser/releases?per_page=100" -o /tmp/releases.json
 node verify/verify_release_links.mjs /tmp/releases.json
 ```
 
@@ -35,7 +35,7 @@ Build it with Python `zipfile` or `tar`, and make sure the artifact **starts wit
 3. **`npm publish` first, tag and Release afterwards.** For 1.0.10 the Release went out before anyone checked the registry mirror, and users simply could not install it. On the maintainer machine `~/.npmrc` defaults to the npmmirror read-only mirror, which cannot publish — `publishConfig.registry` pins the official registry, so do not rely on the CLI default. `files` excludes `verify/` and `extension/`; confirm `lib/` is current first
 4. **Wait for the mirror to catch up before announcing anything**: `dsh plugin add` pins the dependency to an **exact version**, and pnpm resolves it from the *user's* registry (for most Chinese users that is `registry.npmmirror.com`). If the mirror has not synced, the install dies with `ERR_PNPM_NO_MATCHING_VERSION`. Check both documents — `curl https://registry.npmjs.org/<pkg>` and `curl https://registry.npmmirror.com/<pkg>` — and only say "install X" once the version is there *and* `dist-tags.latest` moved
 4b. **A second gate causes the same "cannot install" report for a different reason.** dsh profiles carry a 24-hour package-age supply-chain gate (measured: `minimumReleaseAge: 1440` in `node_modules/.pnpm-workspace-state-v1.json`). A version younger than that is rejected with `ERR_PNPM_NO_MATURE_MATCHING_VERSION`, and the message quotes `was published at …, within the minimumReleaseAge cutoff (…)`. **Discriminator**: `NO_MATCHING_VERSION` = the registry you are installing from does not have that version (mirror lag); `NO_MATURE_MATCHING_VERSION` = it does, but the release is too new — the only fix is waiting past the cutoff. Rule both out before announcing "install X", or a fresh publish will generate install-failure issues on day one.
-5. Tag, create the Release, keep the asset naming: `DSH-Browser-Control-vX.Y.Z.zip` (extension), `dsh-browser-control-plugin-vX.Y.Z.zip` (plugin)
+5. Tag, create the Release, keep the asset naming: `dsh-browser-vX.Y.Z.zip` (extension), `dsh-browser-plugin-vX.Y.Z.zip` (plugin)
 6. **The offline plugin zip must contain `cordis.patch.yml`** — `package.json`'s `dsh.bundle.patch` points at it, and the v1.0.7 asset omitted it, so installing from that zip mounted nothing. The extension zip must carry every file under `extension/`, `icons/` included
 7. **Put checksums in the release body, not in `.sha256` sidecar assets**: list file name / byte size / SHA-256 (MD5 too when useful), then download each asset back anonymously and re-check the first 4 bytes, `unzip -t` and the entry separators; finish with `verify_release_links.mjs` so no document points at a missing asset
 8. **Re-run the failed CI job after creating the Release** (`gh run rerun <id> --failed`): the link audit checks that every release download link in the docs exists, and there is always a few-minute gap between the push and the Release, so that step is guaranteed red until the assets are up — it happened for both 1.0.9 and 1.0.11 and is not an artifact problem
@@ -61,6 +61,6 @@ Build it with Python `zipfile` or `tar`, and make sure the artifact **starts wit
 
 ## Reporting issues
 
-Include: dsh version, Chrome/Edge version, the status page output (`http://127.0.0.1:9777/`), `netstat -ano | findstr :9777`, and the installed package version (`npm ls dsh-browser-control`).
+Include: dsh version, Chrome/Edge version, the status page output (`http://127.0.0.1:9777/`), `netstat -ano | findstr :9777`, and the installed package version (`npm ls dsh-browser`).
 
 More notes and recorded findings: [verify/README.md](verify/README.md).

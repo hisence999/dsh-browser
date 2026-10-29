@@ -42,7 +42,7 @@ AI 正在操作的那个标签页会画一圈蓝色渐变描边和一个「AI �
 
 两种方式都可以：
 
-- **私下报告（推荐）**：GitHub Security Advisories（<https://github.com/hisence999/dsh-browser-control/security/advisories/new>）
-- **直接提 Issue**：如果问题不涉及可被利用的细节（如具体的攻击步骤、Token 绕过方法），直接到 <https://github.com/hisence999/dsh-browser-control/issues> 开 Issue 描述即可
+- **私下报告（推荐）**：GitHub Security Advisories（<https://github.com/hisence999/dsh-browser/security/advisories/new>）
+- **直接提 Issue**：如果问题不涉及可被利用的细节（如具体的攻击步骤、Token 绕过方法），直接到 <https://github.com/hisence999/dsh-browser/issues> 开 Issue 描述即可
 
 涉及利用方式的问题请优先走私信渠道，避免被未修复时公开利用。

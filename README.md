@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hisence999/dsh-browser-control">github.com/hisence999/dsh-browser-control</a>
+  <a href="https://github.com/hisence999/dsh-browser">github.com/hisence999/dsh-browser</a>
 </p>
 
 Chrome 扩展 + DeepSeek Harness 插件，让 AI Agent 像人一样操控你的**真实**浏览器。
@@ -60,7 +60,7 @@ Chrome 扩展（chrome.debugger / CDP）
 本包是 bundle 包（`package.json` 的 `dsh.bundle.patch` 指向 `cordis.patch.yml`），装好会自动加入 profile 的 `dsh.profile.bundles`，重启 DSH 即加载。
 
 ```bash
-dsh plugin --profile desktop add "file:D:\path\to\dsh-browser-control"
+dsh plugin --profile desktop add "file:D:\path\to\dsh-browser"
 ```
 
 - **必须显式写 `file:` 前缀**。裸路径 / 相对路径会被 pnpm 当成 `link:`，在 hoisted 布局下不会物化到 `node_modules` 顶层，启动时解析不到该包。

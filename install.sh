@@ -1,7 +1,7 @@
 #!/bin/bash
 # Legacy install: copies the v1.0.2-era plugin into a dsh source checkout.
 # The current layout ships as a Profile Bundle instead — prefer:
-#   dsh plugin --profile web add "file:/path/to/dsh-browser-control"
+#   dsh plugin --profile web add "file:/path/to/dsh-browser"
 # Usage: ./install.sh /path/to/deepseek-harness
 set -e
 
@@ -14,7 +14,7 @@ if [ ! -d "$SCRIPT_DIR/plugin" ]; then
   echo "For the in-tree install, restore it from the v1.0.2 tag first:"
   echo "  git checkout v1.0.2 -- plugin tsconfig.json"
   echo "Or use the one-line profile install instead:"
-  echo "  dsh plugin --profile web add \"file:/path/to/dsh-browser-control\""
+  echo "  dsh plugin --profile web add \"file:/path/to/dsh-browser\""
   exit 1
 fi
 

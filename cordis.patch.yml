@@ -1,4 +1,4 @@
-# dsh-browser-control: the bridge listens by default (since v1.0.6 the schema
+# dsh-browser: the bridge listens by default (since v1.0.6 the schema
 # default is `true`; this patch must not contradict it — an explicit `false` here
 # overrode that default and made a fresh install look broken, see issue #4).
 # To opt out, add to your profile patch:

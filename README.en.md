@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hisence999/dsh-browser-control">github.com/hisence999/dsh-browser-control</a>
+  <a href="https://github.com/hisence999/dsh-browser">github.com/hisence999/dsh-browser</a>
 </p>
 
 A Chrome extension + DeepSeek Harness plugin that lets AI agents drive your **real** browser like a human.
@@ -60,7 +60,7 @@ A whale icon with a breathing green dot in the toolbar means it is connected.
 This package is a bundle (`package.json` points `dsh.bundle.patch` at `cordis.patch.yml`), so a successful install registers it under the profile's `dsh.profile.bundles` and a DSH restart loads it.
 
 ```bash
-dsh plugin --profile desktop add "file:D:\path\to\dsh-browser-control"
+dsh plugin --profile desktop add "file:D:\path\to\dsh-browser"
 ```
 
 - **Use the explicit `file:` prefix.** A bare or relative path is treated by pnpm as `link:`, which is not materialized at the top of `node_modules` under a hoisted layout, so the package cannot be resolved at startup.

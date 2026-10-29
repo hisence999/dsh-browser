@@ -20,7 +20,7 @@ npm run verify    # verify/ 里的实测台，会占用 127.0.0.1:9777
 只改 `extension/` 时不会动 `lib/`；只改文档时两个都可以不跑，但改动涉及下载链接要跑：
 
 ```bash
-curl -s "https://api.github.com/repos/hisence999/dsh-browser-control/releases?per_page=100" -o /tmp/releases.json
+curl -s "https://api.github.com/repos/hisence999/dsh-browser/releases?per_page=100" -o /tmp/releases.json
 node verify/verify_release_links.mjs /tmp/releases.json
 ```
 
@@ -35,7 +35,7 @@ node verify/verify_release_links.mjs /tmp/releases.json
 3. **先 `npm publish`，后打 tag / 建 Release**（v1.0.10 就是先把 Release 发出去了，结果用户装不到）。这台机器 `~/.npmrc` 的默认源是 npmmirror 镜像，**不能发布**；包里的 `publishConfig.registry` 已写死官方源，别再依赖命令行默认值。`files` 白名单不含 `verify/` 和 `extension/`，发包前确认 `lib/` 已是最新
 4. **发布后要等镜像同步再宣布**：`dsh plugin add` 会把依赖**钉成确切版本号**，而宿主用的是用户自己的 registry（国内多半是 `registry.npmmirror.com`）。镜像没跟上时 pnpm 直接 `ERR_PNPM_NO_MATCHING_VERSION`，安装失败。核对两条：`curl https://registry.npmjs.org/<pkg>` 与 `curl https://registry.npmmirror.com/<pkg>`，**两边都要看到该版本、且 `dist-tags.latest` 也跟上**，再说「装 XX 版」
 4b. **还有一个 24 小时的「包龄」闸门会造成同类抱怨。** dsh 的 profile 自带 `minimumReleaseAge: 1440`（实测在 `node_modules/.pnpm-workspace-state-v1.json` 里），发布未满 24 小时的版本被拦时报 `ERR_PNPM_NO_MATURE_MATCHING_VERSION`，报文里带 `was published at …, within the minimumReleaseAge cutoff (…)`。**判据**：`NO_MATCHING_VERSION` = 你配置的源里没这个版本（镜像滞后）；`NO_MATURE_MATCHING_VERSION` = 有，只是太新，只能等满 cutoff。宣布「装 XX 版」之前把这两条都排掉，否则刚发完就会收到装不上的 issue。
-5. 打 tag、建 Release，资产沿用现有命名：`DSH-Browser-Control-vX.Y.Z.zip`（扩展）、`dsh-browser-control-plugin-vX.Y.Z.zip`（插件）
+5. 打 tag、建 Release，资产沿用现有命名：`dsh-browser-vX.Y.Z.zip`（扩展）、`dsh-browser-plugin-vX.Y.Z.zip`（插件）
 6. **插件离线包里必须有 `cordis.patch.yml`**——`package.json` 的 `dsh.bundle.patch` 指向它，v1.0.7 那份资产漏了这个文件，离线安装就等于没挂载；扩展包必须含 `extension/` 下全部文件（含 `icons/`）
 7. **校验和写在 Release 正文里，不要上传 `.sha256` 附件**：正文列 文件名 / 字节数 / SHA-256（必要时加 MD5），上传后匿名下载回来核对头 4 字节、`unzip -t` 与条目分隔符；最后跑 `verify_release_links.mjs` 确认文档链接不是死链
 8. **建完 Release 之后把那次 CI 重跑一次**（`gh run rerun <id> --failed` 或页面上的 Re-run failed jobs）：链接审计那一步要看的是「文档里的 release 下载链接是否存在」，而 push 与建 Release 之间必然有几分钟空窗，这一步在 Release 建好前一定红 —— 1.0.9 与 1.0.11 都是这样，别误判成产物问题
@@ -63,7 +63,7 @@ node verify/verify_release_links.mjs /tmp/releases.json
 
 ## 报告问题
 
-提 Issue 时请附上：dsh 版本、Chrome/Edge 版本、桥接状态页（`http://127.0.0.1:9777/`）的输出、`netstat -ano | findstr :9777` 的结果，以及 npm 包的版本号（`npm ls dsh-browser-control`）。
+提 Issue 时请附上：dsh 版本、Chrome/Edge 版本、桥接状态页（`http://127.0.0.1:9777/`）的输出、`netstat -ano | findstr :9777` 的结果，以及 npm 包的版本号（`npm ls dsh-browser`）。
 
 更多实测台的坑与结论记录见 [verify/README.md](verify/README.md)。
 

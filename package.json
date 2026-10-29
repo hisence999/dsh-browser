@@ -32,12 +32,12 @@
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hisence999/dsh-browser-control.git"
+    "url": "git+https://github.com/hisence999/dsh-browser.git"
   },
   "bugs": {
-    "url": "https://github.com/hisence999/dsh-browser-control/issues"
+    "url": "https://github.com/hisence999/dsh-browser/issues"
   },
-  "homepage": "https://github.com/hisence999/dsh-browser-control#readme",
+  "homepage": "https://github.com/hisence999/dsh-browser#readme",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
