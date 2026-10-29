@@ -571,5 +571,79 @@ for (const kind of ["keydown", "input", "paste"]) {
     (await yieldsOf(ctx))[agent]?.reason === "user_input", JSON.stringify(await yieldsOf(ctx)));
 }
 
+{
+  // (f) ★ 裸 payload：某些 Chromium 构建给单字符串参数的 binding payload **不带 JSON 引号**
+  //     （实际 payload 就是 `pointerdown`）。不兜底的话 `JSON.parse` 必抛 → kind 变空串 →
+  //     那笔派发账永远消不掉 → AI 自己的一次真实点击被当成"用户接管"，yield 档下当场自锁。
+  //     探针自己会 `JSON.stringify`，所以裸形态只能直接走 `chrome.debugger.onEvent` 真路径。
+  const BINDING = "__dshUserInput"; // 线协议契约：扩展侧 `USER_INPUT_BINDING`
+  const bare = await bootYield();
+  const bareTab = await openAgentTab(bare.ctx);
+  await refusalOf(bare.ctx, "press", { key: "Enter", tabId: bareTab }); // 登记一笔 keydown 债
+  bare.model.fireBinding(bareTab, BINDING, "keydown"); // 裸 payload，不带引号
+  await tick(40);
+  check("裸 payload 也认得出 kind：我们自己派发的按键不会被当成用户接管",
+    none(await bare.ctx.syncAgentState()), JSON.stringify(await yieldsOf(bare.ctx)));
+
+  // 反过来：没有那笔债时，同一条裸 payload 必须照常算真实输入（兜底不许写成一律吞掉）。
+  const bareFree = await bootYield();
+  const bareFreeTab = await openAgentTab(bareFree.ctx);
+  bareFree.model.fireBinding(bareFreeTab, BINDING, "pointerdown");
+  await tick(40);
+  check("没有派发账时，同一条裸 payload 仍然算用户接管",
+    (await yieldsOf(bareFree.ctx))[bareFreeTab]?.reason === "user_input",
+    JSON.stringify(await yieldsOf(bareFree.ctx)));
+
+  // 带引号的正常形态不许被兜底改坏：两种 payload 都要认。
+  const quoted = await bootYield();
+  const quotedTab = await openAgentTab(quoted.ctx);
+  quoted.model.fireBinding(quotedTab, BINDING, JSON.stringify("pointerdown"));
+  await tick(40);
+  check("带引号的正常 payload 照旧认（两种形态并存）",
+    (await yieldsOf(quoted.ctx))[quotedTab]?.reason === "user_input",
+    JSON.stringify(await yieldsOf(quoted.ctx)));
+}
+
+{
+  // (g) ★ `tabs.closeMany` 的让出判定必须**逐项**：旧实现拿"默认目标/活动标签"判整批，
+  //     于是"被让出的那页根本不在 tabIds 里"也会把一整批关闭请求全拒，一个都没关。
+  const { model, ctx, page } = await bootYield();
+  const first = await openAgentTab(ctx, "https://a.test/");
+  const second = await openAgentTab(ctx, "https://b.test/"); // 最后认领的 = 默认目标
+  await userTouch(page, second);
+  check("前提：默认目标已被让出",
+    (await yieldsOf(ctx))[second]?.reason === "user_input", JSON.stringify(await yieldsOf(ctx)));
+  const cleanBatch = await ctx.runCommand("tabs.closeMany", { tabIds: [first] })
+    .then((r) => r, (e) => String(e?.message ?? e));
+  check("批量里没有让出的页 → 照关（旧实现会因为默认目标被让出而整批拒绝）",
+    typeof cleanBatch === "object" && Array.isArray(cleanBatch.closed) && cleanBatch.closed.includes(first),
+    JSON.stringify(cleanBatch).slice(0, 140));
+
+  // 批量里**混进**让出的页：整批拒绝、零副作用，且文案只点出真正被让出的那些。
+  const third = await openAgentTab(ctx, "https://c.test/");
+  const fourth = await openAgentTab(ctx, "https://d.test/");
+  await userTouch(page, fourth);
+  const mixed = await refusalOf(ctx, "tabs.closeMany", { tabIds: [third, fourth] });
+  check("批量里混进被让出的页 → 整批拦下", String(mixed).startsWith(MARKER), String(mixed).slice(0, 80));
+  check("文案只点出被让出的那个（不连坐同批的其它页）",
+    String(mixed).includes(`#${fourth}`) && !String(mixed).includes(`#${third}`), String(mixed).slice(0, 140));
+  check("零副作用：这一批两个页都还在",
+    model.tabs.has(third) && model.tabs.has(fourth), JSON.stringify({ third: model.tabs.has(third), fourth: model.tabs.has(fourth) }));
+
+  // 让出记录挂在一个**已经不存在**的标签页上（扩展还没收到 onRemoved）：它进了批次也不许挡路，
+  // 而且要被顺手清掉——否则那条幽灵让出会永远留在存储里。
+  const gone = await openAgentTab(ctx, "https://e.test/");
+  await userTouch(page, gone);
+  model.tabs.delete(gone);
+  const later = await openAgentTab(ctx, "https://f.test/");
+  const afterStale = await ctx.runCommand("tabs.closeMany", { tabIds: [gone, later] })
+    .then((r) => r, (e) => String(e?.message ?? e));
+  check("批次里那个页已经没了 → 不吃让出、批量照关",
+    typeof afterStale === "object" && Array.isArray(afterStale.closed) && afterStale.closed.includes(later),
+    JSON.stringify(afterStale).slice(0, 140));
+  check("顺手把那条过期让出清掉", (await yieldsOf(ctx))[gone] === undefined,
+    JSON.stringify(await yieldsOf(ctx)));
+}
+
 console.log(`\n结论：${fails === 0 ? "看≠动手、动手即让出，四条解除路径与拒绝侧全部符合契约" : fails + " 项未通过"}`);
 process.exit(fails ? 1 : 0);

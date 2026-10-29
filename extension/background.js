@@ -1452,12 +1452,16 @@ async function armUserInputProbe(tabId) {
  * 就变成"永远不报"。
  */
 function bindingKindOf(payload) {
+	const raw = String(payload ?? '')
 	try {
-		const parsed = JSON.parse(String(payload ?? '""'))
-		return typeof parsed === 'string' ? parsed : ''
-	} catch {
-		return ''
-	}
+		const parsed = JSON.parse(raw)
+		if (typeof parsed === 'string') return parsed
+	} catch { /* 落进下面的兜底 */ }
+	// 【兜底】某些 Chromium 构建给单字符串参数的 binding payload **不带 JSON 引号**
+	// （实测 payload 就是 `pointerdown`：JSON.parse 必抛 → kind 变空串 → 派发账永远消不掉
+	//  → agent 自己的一次真实点击被当成"用户接管"，yield 档下当场自锁）。
+	const bare = raw.trim()
+	return bare.length >= 2 && bare.startsWith('"') && bare.endsWith('"') ? bare.slice(1, -1) : bare
 }
 
 /**
@@ -1515,6 +1519,27 @@ async function yieldRefusalFor(command, params) {
 	// `force` 是「用户明确让我关这个标签页」：那是他能给的最高授权，闭着眼拒它反而变成
 	// 拿安全当借口不听人话。其余情况一律拦下。
 	if ((command === 'tabs.close' || command === 'tabs.closeMany') && params?.force === true) return null
+	// `tabs.closeMany` 没有单个 `tabId`：判定必须**逐项**来。拿"默认目标/活动标签"去判会误伤整批——
+	// 实测过：被让出的是当时的活动标签，而它根本不在 `tabIds` 里，一整批关闭照样被拒，
+	// 一个都没关。逐个查，只拦真正被让出的那些，其余照关。
+	const batch = Array.isArray(params?.tabIds)
+		? params.tabIds.map((n) => Number(n)).filter((n) => Number.isInteger(n))
+		: null
+	if (batch !== null && batch.length > 0) {
+		const batchState = await syncAgentState()
+		const blocked = []
+		for (const id of batch) {
+			if (batchState.yields[id] === undefined) continue
+			// 标签页已经没了：顺手把这条让出清掉，别让它一直挂着。
+			if (await tabStillThere(id)) blocked.push(id)
+			else await forgetOwned([id])
+		}
+		if (blocked.length === 0) return null
+		return `${YIELDED_MARKER} 用户已经接管了这些标签页（${blocked.map((id) => `#${id}`).join('、')}）：命令 ${command} 被拦下，没有向浏览器发出任何操作。`
+			+ `他可能正在这些页面上操作，跟他在同一个页面上继续动只会互相破坏。`
+			+ `如果要关的就是这些页，那一定要先问用户：他确认之后传 force:true（那一位本来就是「用户明确让我关」）。`
+			+ `不要原地重试。`
+	}
 	let tab
 	try { tab = await resolveTab(params?.tabId, policyOf(params).jar) } catch { return null }
 	const state = await syncAgentState()
