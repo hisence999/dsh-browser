@@ -1,4 +1,4 @@
-# DSH Browser Control
+# DSH Browser
 
 <p align="center">
   <img src="extension/icons/icon128.png" width="100" alt="DSH Browser Control">
