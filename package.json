@@ -57,10 +57,6 @@
     "check": "npm run typecheck && npm run build && publint",
     "verify": "node verify/verify_config_patch.mjs && node verify/verify_peers.mjs && node verify/verify_surface.mjs && node verify/verify_tab_groups.mjs && node verify/verify_tabs_close_many.mjs && node verify/verify_cdp_retry.mjs && node verify/verify_snapshot_ax.mjs && node verify/verify_hard_lock.mjs && node verify/verify_policy.mjs && node verify/verify_extension_e2e.mjs && node verify/verify_plugin.mjs legacy && node verify/verify_plugin.mjs conflict && node verify/verify_plugin.mjs new && node verify/verify_http.mjs && node verify/verify_errors.mjs && node verify/verify_hold.mjs && node verify/verify_protocol.mjs && node verify/verify_bundle_http.mjs && node verify/verify_nav_report.mjs && node verify/verify_nav_landing.mjs && node verify/verify_render_contract.mjs && node verify/verify_press_events.mjs && node verify/verify_tool_docs.mjs && node verify/verify_cdp_tool.mjs && node verify/verify_settings_routes.mjs && node verify/verify_settings_mount.mjs && node verify/verify_client_module.mjs && node verify/verify_ownership.mjs && node verify/verify_focus_policy.mjs && node verify/verify_yield.mjs && node verify/verify_isolated.mjs && node verify/verify_profile_tool.mjs && node verify/verify_group_title.mjs && node verify/verify_highlight.mjs && node verify/verify_dialog_eval.mjs && node verify/verify_capture_touch.mjs"
   },
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
-  },
 
   "keywords": [
     "deepseek-harness",

@@ -1,4 +1,4 @@
-/** Popup for DSH Browser Control: big status hero, config tucked under 高级. */
+/** Popup for DSH Browser: big status hero, config tucked under 高级. */
 'use strict';
 
 const $ = (id) => document.getElementById(id);

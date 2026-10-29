@@ -1,4 +1,4 @@
-# DSH Browser Control
+# DSH Browser
 
 Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱动用户的真实浏览器。
 

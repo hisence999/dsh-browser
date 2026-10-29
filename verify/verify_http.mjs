@@ -57,7 +57,7 @@ check("OPTIONS 预检不带 ACAO / Allow-Methods", res.status === 204 && corsCle
 
 res = await fetch(`${BASE}/`, { headers: { Origin: "http://evil.example" } });
 const pageText = await res.text();
-check("状态页 HTML 仍可同源访问", res.status === 200 && pageText.includes("DSH Browser Control"));
+check("状态页 HTML 仍可同源访问", res.status === 200 && pageText.includes("DSH Browser"));
 check("状态页自带 Token 输入框并用 Bearer 调用清理", pageText.includes('id="token"') && pageText.includes("'Authorization':'Bearer '"));
 check("状态页显示令牌强度行", pageText.includes("insecureToken") && pageText.includes("令牌强度"));
 

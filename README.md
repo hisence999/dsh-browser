@@ -1,7 +1,7 @@
 # DSH Browser
 
 <p align="center">
-  <img src="extension/icons/icon128.png" width="100" alt="DSH Browser Control">
+  <img src="extension/icons/icon128.png" width="100" alt="DSH Browser">
 </p>
 
 <p align="center">
@@ -101,7 +101,7 @@ Token 也可以写 `?token=` 或 `X-Token:`；不带或带错一律 401。`/` �
 
 ```
 Chrome 浏览器
-  └─ DSH Browser Control 扩展 (MV3)
+  └─ DSH Browser 扩展 (MV3)
        └─ chrome.debugger (CDP)
             └─ WebSocket ──────→ DSH 插件（browser-bridge，127.0.0.1:9777）
                                       └─ browser_* 工具 → Agent

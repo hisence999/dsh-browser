@@ -1,5 +1,5 @@
 /**
- * Browser-bridge plugin: one local WebSocket endpoint the DSH Browser Control
+ * Browser-bridge plugin: one local WebSocket endpoint the DSH Browser
  * extension connects to, plus the model-facing `browser_*` tools that drive
  * it. The Settings-managed `enabled` flag starts and stops the listener live
  * through dsh-settings' change hook — no reload needed.

@@ -29,7 +29,7 @@ const check = (name, ok, detail = "") => {
 };
 const errOf = (p) => p.then(() => null, (e) => String(e?.message ?? e));
 const evalIn = (ctx, expr) => runInContext(expr, ctx);
-const TITLE = "DSH Browser Control";
+const TITLE = "DSH Browser";
 
 /** 一台「页面」：只回答三种自包含函数，其余 evaluate 一律 null。 */
 function installFakePage(model) {

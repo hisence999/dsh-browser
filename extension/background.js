@@ -1,5 +1,5 @@
 /**
- * DSH Browser Control — MV3 service worker.
+ * DSH Browser — MV3 service worker.
  *
  * Maintains one outbound WebSocket to the local bridge (bridge/server.mjs),
  * receives JSON commands, executes them through chrome.tabs and the Chrome
@@ -339,7 +339,7 @@ const HOLD_MARKER_ATTR = 'data-dsh-hold'
 /** storage.session 里的键：{ [tabId]: { at, note, aborted, covered, reason } }。 */
 const HOLD_STATE_KEY = 'holdByTab'
 /** 标题由扩展写死；调用方只能提供正文（否则模型能写一句系统口吻的话冒充提示）。 */
-const HOLD_FIXED_TITLE = 'DSH Browser Control'
+const HOLD_FIXED_TITLE = 'DSH Browser'
 /** 正文上限：模型给的话头再长也不会把卡片撑爆；换行压平成空格。 */
 const HOLD_NOTE_MAX = 400
 /** 中止态下直接拒绝的扩展命令（与 #17 里列的那四条一致）。 */

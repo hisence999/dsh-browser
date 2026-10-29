@@ -1,7 +1,7 @@
 # DSH Browser
 
 <p align="center">
-  <img src="extension/icons/icon128.png" width="100" alt="DSH Browser Control">
+  <img src="extension/icons/icon128.png" width="100" alt="DSH Browser">
 </p>
 
 <p align="center">
@@ -74,7 +74,7 @@ To change the port / token / turn the default off, configure `- id: browser-brid
 
 Once installed, just talk in natural language — the agent picks the tools. A few things worth knowing up front:
 
-**Settings page**: on dsh 0.1.7+ / 0.2.x, "Settings → Browser Control" shows the link status, the switches (read-only, script execution, lazy docs, raw CDP, isolated instance, group name, AI highlight, tab placement, focus policy, user takeover) and a cleanup button for screenshots and scratch files.
+**Settings page**: on dsh 0.1.7+ / 0.2.x, "Settings → 浏览器控制" (Browser Control) shows the link status, the switches (read-only, script execution, lazy docs, raw CDP, isolated instance, group name, AI highlight, tab placement, focus policy, user takeover) and a cleanup button for screenshots and scratch files.
 
 **What the AI's tabs look like**: tabs it opens are collected into a blue tab group (name `DSH` by default and configurable; empty = no group; a single call may override it with `groupTitle`). Ownership is tracked by **group id**, never by name — a group of yours with the same name is never taken over. It only closes tabs it opened; closing yours requires an explicit `force`.
 
@@ -101,7 +101,7 @@ The token may also be passed as `?token=` or `X-Token:`; missing or wrong is 401
 
 ```
 Chrome browser
-  └─ DSH Browser Control extension (MV3)
+  └─ DSH Browser extension (MV3)
        └─ chrome.debugger (CDP)
             └─ WebSocket ──────→ DSH plugin (browser-bridge, 127.0.0.1:9777)
                                       └─ browser_* tools → Agent

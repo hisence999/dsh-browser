@@ -1,5 +1,5 @@
 /**
- * Browser-bridge plugin: one local WebSocket endpoint the DSH Browser Control
+ * Browser-bridge plugin: one local WebSocket endpoint the DSH Browser
  * extension connects to, plus the model-facing `browser_*` tools that drive
  * it. The Settings-managed `enabled` flag starts and stops the listener live
  * through dsh-settings' change hook — no reload needed.
@@ -678,7 +678,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController, options: 
 	// 提示词里那两句默认目标与让出，是「模型自己就能做对」的关键：工具结果里当然也写着
 	// （`agentTargetTabId` / `focus` / `yielded`），但模型读提示词的成本远低于读 payload。
 	const promptText = 'The browser_* tools drive the user\'s real, logged-in browser through the DSH '
-		+ 'Browser Control extension. '
+		+ 'Browser extension. '
 		+ 'Which tab a command lands on: an explicit tabId always wins; otherwise the tab the agent '
 		+ 'claimed (browser_tabs open/group/activate) — once you have a tab of your own, commands keep '
 		+ 'landing there instead of following the user\'s gaze. A session that never claimed a tab follows '
@@ -913,7 +913,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController, options: 
 			const axFallback = typeof raw.axFallback === 'string' && raw.axFallback.length > 0
 				? raw.axFallback
 				: (requestedAx && !gotAx
-					? 'this extension ignored mode:"ax" and returned CSS-DOM matches (AX mode needs DSH Browser Control extension v1.0.11 or newer) — the names below are tag names, not accessible names'
+					? 'this extension ignored mode:"ax" and returned CSS-DOM matches (AX mode needs DSH Browser extension v1.0.11 or newer) — the names below are tag names, not accessible names'
 					: undefined)
 			return {
 				tabId: raw.tabId,
