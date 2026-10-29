@@ -15,7 +15,7 @@
  * 重试安全。
  */
 /** 失败原因分类。 */
-export type BridgeErrorCode = 'bridge_disabled' | 'extension_offline' | 'command_timeout' | 'link_lost' | 'cancelled' | 'not_configured' | 'blocked_by_policy' | 'locked_by_user' | 'lock_unreadable' | 'held_by_user' | 'command_failed';
+export type BridgeErrorCode = 'bridge_disabled' | 'extension_offline' | 'command_timeout' | 'link_lost' | 'cancelled' | 'not_configured' | 'blocked_by_policy' | 'locked_by_user' | 'lock_unreadable' | 'held_by_user' | 'yielded_to_user' | 'incognito_unavailable' | 'command_failed';
 /**
  * 扩展侧拒绝命令时写在 error 文本最前面的两个标记。
  *
@@ -29,6 +29,22 @@ export declare const LOCKED_BY_USER_MARKER = "browser-locked-by-user:";
 export declare const LOCK_UNREADABLE_MARKER = "browser-lock-unreadable:";
 /** 接管浮层上的「中止操作」。同样的线协议约定：字面量在扩展侧有一份，对账在 `verify_errors.mjs`。 */
 export declare const HOLD_ABORTED_MARKER = "browser-hold-aborted:";
+/**
+ * 用户接管了 AI 正在用的那个标签页（切了上去），写操作被让出。
+ *
+ * 与浮层「中止」的区别是**谁按的**：中止是用户在浮层上显式按下，让出是用户只是切到了
+ * 那个标签页。两者的共同点是「命令一条都没发出去」，所以都必须报 `not_started` ——
+ * 否则模型会以为点击可能已经发生，然后去做一次「补偿性」的观察或重放。
+ */
+export declare const YIELDED_TO_USER_MARKER = "browser-yielded-to-user:";
+/**
+ * 扩展没有无痕/InPrivate 权限：隔离实例开不出来。
+ *
+ * 这条跟前面几条的区别是**它不是任何人的决定**——不是用户按了锁、也不是用户接管，
+ * 而是浏览器那层的权限开关从没打开过。所以文案要直说去哪儿打开，别让模型以为
+ * 「用户拒绝了」而反复道歉或换工具。
+ */
+export declare const INCOGNITO_UNAVAILABLE_MARKER = "browser-incognito-unavailable:";
 /** 副作用状态。 */
 export type EffectState = 
 /** 确定没有副作用落到页面上，重试安全。 */

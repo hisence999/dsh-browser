@@ -6,3 +6,8 @@ lib/tsconfig.tsbuildinfo
 .DS_Store
 *.tmp
 dsh-browser-shots/
+# 工作区约定 C1：改动前备份落在项目根目录 backups/，不参与版本管理
+backups/
+# agent 的长期记忆与过程日志（本项目在此目录下运行，属于本机运行态）：
+# 里面是本机的路径、环境与排障过程，不进公开仓库。
+memory/

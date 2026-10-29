@@ -20,7 +20,7 @@
 /** 只读档允许的命令：读页面、读扩展自己的缓冲、或者把页面**内容**落到本机文件。 */
 export const READ_ONLY_ALLOWED: ReadonlySet<string> = new Set([
 	// 身份与链路探测
-	'ping', 'browser.info',
+	'ping', 'browser.info', 'profile.status',
 	// 读页面
 	'content', 'find', 'snapshot', 'screenshot', 'pdf', 'wait',
 	// 读扩展采集到的缓冲
@@ -31,7 +31,7 @@ export const READ_ONLY_ALLOWED: ReadonlySet<string> = new Set([
  * 会执行**任意页面脚本**的扩展命令。这条与只读档分开管，因为用户可能想「可以读、
  * 也可以点，但别在我页面里跑任意 JS」——`browser_evaluate` 能绕开其他所有工具做的事。
  */
-export const SCRIPT_COMMANDS: ReadonlySet<string> = new Set(['eval'])
+export const SCRIPT_COMMANDS: ReadonlySet<string> = new Set(['eval', 'cdp.call'])
 
 /**
  * 不经过扩展、直接在插件进程里改动本机文件的命令名。
@@ -45,10 +45,12 @@ export const LOCAL_DESTRUCTIVE_COMMANDS: ReadonlySet<string> = new Set(['cleanup
 /**
  * 明确登记「会改页面 DOM」的命令 —— 只读档里必须拒，理由写在名字旁边。
  *
- * 现在只有 `hold`（接管浮层）：它往页面 `<html>` 下插一个宿主元素。默认拒绝其实已经
- * 盖住它（不在 `READ_ONLY_ALLOWED` 里），但「默认拒绝是对的」不等于「不需要解释」：
- * 这一条要的不是安全性，是**拒绝理由**——告诉模型为什么一个「只是提示用户」的动作
- * 在只读档里也算写操作。
+ * 现在往页面 `<html>` 下插宿主的只有 `hold`（接管浮层）。AI 高亮框是**扩展侧自动**做的
+ * （认领标签页时顺手插一层，没有对应命令），所以它不在这张表里；只读档也不受影响：
+ * `tabs.open` / `tabs.group` / `tabs.activate` 在只读档里本就被拒，认领发生不了，框也就
+ * 画不出来。默认拒绝其实已经盖住它，但「默认拒绝是对的」不等于「不需要解释」：这一条要
+ * 的不是安全性，是**拒绝理由**——告诉模型为什么一个「只是提示用户」的动作在只读档里也
+ * 算写操作。
  *
  * `hold` 是一条命令带 `action`（on/off/status）：on/off 改 DOM，**status 只读**
  * （它读 session 里的条目 + 探一下页面上还有没有那层宿主），所以只读档放行 status。
@@ -63,6 +65,14 @@ export interface PolicyFlags {
 	readOnly: boolean
 	/** 允许在页面里执行任意脚本（`browser_evaluate`）。 */
 	allowScript: boolean
+	/**
+	 * 允许开**隔离实例**（无痕罐）。
+	 *
+	 * 默认 false：这是一条「在用户屏幕上新开一个窗口」的可见动作，而且它还能绕过用户
+	 * 真实会话（无痕罐里登录的东西退出即清）。隔离实例本来就需要两道人工授权
+	 * （本开关 + 浏览器扩展管理页的「在无痕/InPrivate 中允许」），我们不给第三条自动通道。
+	 */
+	allowIncognito: boolean
 }
 
 const CONFIG_HINT = '开关在 profile 的 cordis.patch.yml 里（browser-bridge 的 config），改完重启 dsh；'
@@ -79,6 +89,14 @@ export function policyRefusal(command: string, flags: PolicyFlags, params?: Reco
 	if (!flags.allowScript && SCRIPT_COMMANDS.has(command)) {
 		return `在页面里执行任意脚本已被关闭（allowScript: false）：命令 ${command} 被拒绝，没有向浏览器发出任何操作。`
 			+ `要读页面内容请改用 browser_read / browser_snapshot / browser_find；确实需要执行脚本时，${CONFIG_HINT}之后再说。`
+	}
+	// 隔离实例：单独一档，而且拒因要**写清楚它到底做了什么**。这条不放进只读白名单，
+	// 所以只读档本来也会拒；但「为什么一个『隔离』的动作反而要授权」必须在文案里回答掉。
+	if (!flags.allowIncognito && command === 'profile.launch') {
+		return `隔离实例默认关闭（allowIncognito: false）：命令 ${command} 被拒绝，没有打开任何无痕窗口。`
+			+ `它会在浏览器里新开一个无痕窗口（独立 cookie 罐，退出即清），既是用户屏上可见的动作，也能绕开用户真实会话，所以要显式打开。`
+			+ `要放开就${CONFIG_HINT}把 allowIncognito 打开（设置页「浏览器控制」里也有这个开关），`
+			+ `并且还要在浏览器扩展管理页允许本扩展在无痕/InPrivate 中运行——那是浏览器那层的权限，插件改不了。不要原地重试本命令。`
 	}
 	if (flags.readOnly && LOCAL_DESTRUCTIVE_COMMANDS.has(command)) {
 		return `只读模式已开启（readOnly: true）：命令 ${command} 会删除本机保存的截图与临时文件，删除不可逆，所以已被拒绝，没有任何文件被删除。`

@@ -52,6 +52,11 @@
 			margin: 0 20px 10px; font-size: 11px; line-height: 1.45; color: #94a3b8;
 		}
 		.lockhint.on { color: #b91c1c; }
+		/* 默认目标与让出：让出时必须显眼（模型在那页上被拦着，用户得知道为什么）。 */
+		.agenthint {
+			margin: 0 20px 10px; font-size: 11px; line-height: 1.45; color: #64748b;
+		}
+		.agenthint.yield { color: #b45309; font-weight: 600; }
 		button.primary {
 			flex: 1; padding: 7px 0; border: none; border-radius: 9px;
 			background: linear-gradient(135deg, #4c6fff, #6d5bff);
@@ -122,6 +127,7 @@
 	</div>
 
 	<div class="lockhint" id="lockhint"></div>
+	<div class="agenthint" id="agenthint"></div>
 
 	<div class="error" id="error"></div>
 

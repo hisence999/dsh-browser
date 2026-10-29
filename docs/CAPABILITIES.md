@@ -45,8 +45,8 @@ BrowserSkill：alarms, activeTab, debugger, downloads, idle, notifications,
 
 | 权限 | 换来什么 | 值不值 |
 |---|---|---|
-| `tabGroups` | 把 agent 开的标签自动归组、上色 → 用户一眼看清"哪些是 AI 干的"，误关风险↓ | ✅ **v1.0.10 已发布**：`DSH` 蓝色分组 + `browser_tabs group/ungroup`。折叠（collapsed）没做，Chrome 那个字段不在归组路径里 |
-| `idle` | 检测到用户回到浏览器 → 自动让出控制权 / 暂停动作 | **很值**，这是安全特性不是便利特性 |
+| `tabGroups` | 把 agent 开的标签自动归组、上色 → 用户一眼看清"哪些是 AI 干的"，误关风险↓ | ✅ **v1.0.10 已发布**：`DSH` 蓝色分组 + `browser_tabs group/ungroup`。折叠（collapsed）没做，Chrome 那个字段不在归组路径里。组名 **v1.1.4 起可配**（`tabGroupTitle`，空串 = 不分组；`browser_tabs` 的 `groupTitle` 按次覆盖），颜色仍固定 `blue`。**自己的组按 `groupId` 认（记在 session 里），不按标题认**——同名不合并，用户自己建的组（哪怕叫 `DSH`）不算 AI 的 |
+| `idle` | 检测到用户回到浏览器 → 提示 / 暂停动作（**不再用作让出信号**：v1.1.5 起让出只认页面里的真实输入，切回来只是看） | 值，但理由变了——不再是安全特性 |
 | `notifications` | 需要登录、验证码、付款确认时喊人（配合"人在环"） | 值 |
 | `power` | 长任务期间阻止系统休眠 | 值，小 |
 | `webNavigation` | 精确的导航开始/完成/重定向链事件，替掉现在轮询 `readyState` 的等待 | 值（和 `browser_wait` 配合） |
@@ -82,6 +82,8 @@ BrowserSkill 明确没有：PDF 导出、网络日志整体导出与过滤、con
 | `readOnly` / `allowScript`（profile 配置） | 用户改配置；模型读得到同一份文件，所以**不是**边界 | `BridgeController.execute()`，命令发给扩展**之前** | 模型那条工具面；HTTP 面不受约束 |
 | 扩展弹窗「锁定」 | **只有用户**：只能通过扩展页面的 `chrome.runtime` 消息设置，manifest 没有 `externally_connectable`，桥侧没有任何解锁命令 | `runCommand` 入口，handler 一个都不执行 | 全部命令（含只读），零 CDP 派发 |
 | profile 里 `enabled: false` / 拔连接 | 用户，但模型也能改（同一个文件） | 插件不监听 | 整个桥 |
+
+这张表只收**能拦住命令**的层。v1.1.4 那圈「AI 正在操作」高亮（`agentHighlight`）不在表里，也不该进来：它是页面里一层 `pointer-events: none` 的装饰，拦不住任何命令，只是一条状态指示。
 
 还缺的一层是 issue #17 提的**接管/防误触浮层**：它是「告知 + 别碰这一页」，不是停止——停止那一层已经由弹窗锁覆盖，`browser_hold` 若自称能停模型就是冒充边界。第 2 层的 `sidePanel`（帧流 + 当前动作 + 一键接管）是同一方向的完整版，但要先加权限；浮层零新权限，可以先到。做的时候有一条必须一起设计：**浮层是往页面里注入元素**，而 `content` / `snapshot` / `find` 照 DOM 抓，不排除自己的子树就会让模型读到「模型正在操作此页」这句话本身。
 

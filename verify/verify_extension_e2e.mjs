@@ -78,6 +78,14 @@ const listed = await call("tabs.list", {});
 check("HTTP 下发 tabs.list → 数量与假浏览器一致",
   listed.json.result?.count === model.tabs.size, `桥报 ${listed.json.result?.count}，假浏览器有 ${model.tabs.size}`);
 
+/* 原生 CDP 透传：扩展命令表里新加的命令也要能从 HTTP 面走完整条链路 */
+model.dbg.results["Page.captureSnapshot"] = { data: "E2E-MHTML-BODY" };
+const cdp = await call("cdp.call", { method: "Page.captureSnapshot", tabId: group.tabId });
+check("HTTP 下发 cdp.call → 扩展真的派发 CDP 并原样回传 JSON",
+  cdp.status === 200 && cdp.json.result?.method === "Page.captureSnapshot"
+  && String(cdp.json.result?.json).includes("E2E-MHTML-BODY") && cdp.json.result?.truncated === false,
+  JSON.stringify(cdp.json).slice(0, 180));
+
 const dissolved = await call("tabs.ungroup", {});
 check("HTTP 下发 tabs.ungroup → 组确实被拆了",
   dissolved.json.result?.ungrouped >= 2 && model.groups.size === 0,

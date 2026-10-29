@@ -89,15 +89,22 @@ const openTab = (ctx, url, extra = {}) => ctx.cmdTabsOpen({ url, wait: false, ..
     JSON.stringify(b));
 }
 
-/* 5 —— 按标题反查：service worker 重启后内存缓存是空的，仍要找回原来的组 */
+/* 5 —— service worker 重启后（同一份 session）仍然要找回原来的组 */
+// 「我们的组」是按 **groupId** 记在 session 里的（不按标题认：用户自己的同名组不能被当成
+// AI 的）。所以这里必须让两个 worker 共用同一份 session —— 真 Chrome 里 session storage
+// 正是活过 service worker 回收的那一层；新开一份空 session 等于换了浏览器（那种情况下
+// 重建一个新组才是不动用户旧组的正确行为，见 §4）。
 {
-  const { model, ctx } = await boot();
-  const a = await openTab(ctx, "https://q.test");
-  const revived = await boot({ model });
+  const model = makeModel();
+  const session = {};
+  const first = await bootBackground({ model, sessionStorage: session });
+  const a = await first.ctx.cmdTabsOpen({ url: "https://q.test", wait: false });
+  // 演 service worker 回收：同一个假浏览器 + 同一份 session，换一个新的扩展上下文。
+  const revived = await bootBackground({ model, sessionStorage: session });
   const joined = await revived.ctx.cmdTabGroup({ tabId: model.addTab(1, "https://r.test") });
-  check("无缓存时按标题找回原组（不新建第二个）",
+  check("重启后按记下的 groupId 找回原组（不新建第二个）",
     joined.grouped === true && joined.created === false && joined.groupId === a.groupId && model.groups.size === 1,
-    JSON.stringify(joined));
+    JSON.stringify({ joined, first: a.groupId }));
 }
 
 /* 6 —— 拆组：按窗口和全局两种范围，拆完缓存要清掉 */
@@ -105,7 +112,7 @@ const openTab = (ctx, url, extra = {}) => ctx.cmdTabsOpen({ url, wait: false, ..
   const { model, ctx } = await boot();
   const w1 = await openTab(ctx, "https://w1.test");
   const t2 = model.addTab(2, "https://w2.test");
-  const g2 = await ctx.addToAgentGroup(t2);
+  const g2 = await ctx.addToAgentGroup(t2, "DSH");
   check("第二个窗口各自有自己的组", g2.grouped === true && g2.created === true && model.groups.size === 2, JSON.stringify(g2));
 
   const scoped = await ctx.cmdTabUngroup({ windowId: 1 });

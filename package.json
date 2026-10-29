@@ -1,7 +1,7 @@
 {
-  "name": "@angelky7/dsh-browser-control",
-  "description": "Local WebSocket bridge between dsh and the DSH Browser Control browser extension, with model-facing browser_* tools and a Settings-managed on/off switch",
-  "version": "1.1.0",
+  "name": "dsh-browser",
+  "description": "让 DeepSeek Harness 驱动你已登录的真实浏览器：本地 WebSocket 桥接 Chrome 扩展，自带 browser_* 工具、标签页归属与接管让出、无痕隔离实例，开关都在设置页",
+  "version": "1.1.7",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -14,10 +14,12 @@
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"
     },
+    "./client": "./client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "cordis.patch.yml",
+    "client.js",
     "lib/index.js",
     "lib/invariant.js",
     "lib/types/**/*.js",
@@ -28,29 +30,38 @@
     "LICENSE"
   ],
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hisence999/dsh-browser-control.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hisence999/dsh-browser-control/issues"
+  },
+  "homepage": "https://github.com/hisence999/dsh-browser-control#readme",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check": "npm run typecheck && npm run build && publint",
-    "verify": "node verify/verify_config_patch.mjs && node verify/verify_peers.mjs && node verify/verify_surface.mjs && node verify/verify_tab_groups.mjs && node verify/verify_tabs_close_many.mjs && node verify/verify_cdp_retry.mjs && node verify/verify_snapshot_ax.mjs && node verify/verify_hard_lock.mjs && node verify/verify_policy.mjs && node verify/verify_extension_e2e.mjs && node verify/verify_plugin.mjs legacy && node verify/verify_plugin.mjs conflict && node verify/verify_plugin.mjs new && node verify/verify_http.mjs && node verify/verify_errors.mjs && node verify/verify_hold.mjs && node verify/verify_protocol.mjs && node verify/verify_bundle_http.mjs && node verify/verify_nav_report.mjs && node verify/verify_nav_landing.mjs && node verify/verify_render_contract.mjs && node verify/verify_press_events.mjs"
+    "verify": "node verify/verify_config_patch.mjs && node verify/verify_peers.mjs && node verify/verify_surface.mjs && node verify/verify_tab_groups.mjs && node verify/verify_tabs_close_many.mjs && node verify/verify_cdp_retry.mjs && node verify/verify_snapshot_ax.mjs && node verify/verify_hard_lock.mjs && node verify/verify_policy.mjs && node verify/verify_extension_e2e.mjs && node verify/verify_plugin.mjs legacy && node verify/verify_plugin.mjs conflict && node verify/verify_plugin.mjs new && node verify/verify_http.mjs && node verify/verify_errors.mjs && node verify/verify_hold.mjs && node verify/verify_protocol.mjs && node verify/verify_bundle_http.mjs && node verify/verify_nav_report.mjs && node verify/verify_nav_landing.mjs && node verify/verify_render_contract.mjs && node verify/verify_press_events.mjs && node verify/verify_tool_docs.mjs && node verify/verify_cdp_tool.mjs && node verify/verify_settings_routes.mjs && node verify/verify_settings_mount.mjs && node verify/verify_client_module.mjs && node verify/verify_ownership.mjs && node verify/verify_focus_policy.mjs && node verify/verify_yield.mjs && node verify/verify_isolated.mjs && node verify/verify_profile_tool.mjs && node verify/verify_group_title.mjs && node verify/verify_highlight.mjs && node verify/verify_dialog_eval.mjs && node verify/verify_capture_touch.mjs"
   },
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/angelky7/dsh-browser-control.git"
-  },
-  "bugs": {
-    "url": "https://github.com/angelky7/dsh-browser-control/issues"
-  },
-  "homepage": "https://github.com/angelky7/dsh-browser-control#readme",
+
   "keywords": [
     "deepseek-harness",
     "deepseek",

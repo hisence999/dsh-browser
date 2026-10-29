@@ -262,19 +262,25 @@ let sharedPageForRecycle;
 
   const htmlOf = evalIn(ctx, "pageHtmlWithoutHold");
   let removed = 0;
+  const host = { remove: () => { removed++; } };
+  // 页面上现在可能同时挂着**两层**我们自己的宿主：接管浮层 + AI 高亮框（两者共用
+  // `data-dsh-hold` 标记）。只摘第一个的话，模型会在 browser_read 里读到剩下那层的徽标
+  // ——那就是把「AI 正在操作」当成页面正文交回去。所以这里造两个宿主。
+  const frame = { remove: () => { removed++; } };
   const fakeDoc = {
     documentElement: {
-      outerHTML: "<html><body><p>页面正文</p><div data-dsh-hold=\"1\">浮层</div></body></html>",
+      outerHTML: "<html><body><p>页面正文</p><div data-dsh-hold=\"1\">浮层</div><div data-dsh-hold=\"highlight\"></div></body></html>",
       cloneNode() {
         return {
-          querySelector: (sel) => (sel === "[data-dsh-hold]" ? { remove: () => { removed++; } } : null),
+          querySelector: (sel) => (sel === "[data-dsh-hold]" ? host : null),
+          querySelectorAll: (sel) => (sel === "[data-dsh-hold]" ? [host, frame] : []),
           outerHTML: "<html><body><p>页面正文</p></body></html>",
         };
       },
     },
   };
   const out = runPageFn(htmlOf, { document: fakeDoc });
-  check("content(html)：浮层宿主被摘掉，页面正文还在", removed === 1 && out.includes("页面正文") && !out.includes("data-dsh-hold"), String(out));
+  check("content(html)：两层自己的宿主（浮层 + 高亮框）都被摘掉，页面正文还在", removed === 2 && out.includes("页面正文") && !out.includes("data-dsh-hold"), String(out));
 }
 
 // ---- 8) 浮层在时，模型自己的点击必须照常落到目标上 ----

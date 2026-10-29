@@ -97,6 +97,8 @@ const WRITE_TOOLS = [
   ['browser_navigate', { url: 'https://example.com' }],
   ['browser_tabs', { action: 'close', tabId: 1 }],
   ['browser_evaluate', { expression: '1+1' }],
+  // 原生 CDP 透传能做 eval 能做的一切（Runtime.evaluate），只读档必须拒绝
+  ['browser_cdp', { method: 'Page.captureSnapshot' }],
   // 接管浮层往页面里插一个宿主元素 = 改页面 DOM，只读档里必须拒
   ['browser_hold', { action: 'on', note: 'x' }],
 ]
@@ -160,6 +162,11 @@ const READ_TOOLS = [
     /browser_read \/ browser_snapshot \/ browser_find/.test(evalRes.message ?? ''))
   const click = await call(tools, 'browser_click', { selector: '#q' })
   check('allowScript:false：点击没有被牵连（走到链路）', click.ok === false && click.code === 'extension_offline', click.code)
+  // 原生 CDP 是 eval 的超集：只关 eval 不关它，等于闸门可以被一条 Runtime.evaluate 绕过去。
+  const cdp = await call(tools, 'browser_cdp', { method: 'Runtime.evaluate' })
+  check('allowScript:false：browser_cdp 同样被拦下并指向 allowScript',
+    cdp.ok === false && cdp.code === 'blocked_by_policy' && /allowScript: false/.test(cdp.message ?? ''),
+    `${cdp.code}｜${(cdp.message ?? '').slice(0, 70)}`)
   await dispose()
 }
 
@@ -240,6 +247,57 @@ const READ_TOOLS = [
     used.length >= 1 && used.includes('cleanup'), `解析到 ${used.length} 个：${used.join(',')}`)
   const ghost = [...LOCAL_DESTRUCTIVE_COMMANDS].filter((c) => !used.includes(c))
   check('对账：LOCAL_DESTRUCTIVE_COMMANDS 每条都真的被 classify() 用到', ghost.length === 0, ghost.join(',') || 'none')
+}
+
+// ---- 10) 隔离实例（allowIncognito）：默认关，且闸门必须在发出去之前 ----
+// 为什么单独写一块而不是塞进上面两张表：`browser_profile` 一条命令带四种动作，闸门
+// 看的是**动作**（status 只读 / launch 开窗口 / use 切罐 / close 关窗口），按工具名一刀
+// 切会把 status 也拒掉。另外 `use` 看起来「只是切个指针」，但切过去之后下一条
+// `tabs.open` 就会真的把无痕窗口建出来——所以它也必须过和 launch 同一道闸门。
+{
+  const { tools, dispose } = await boot({ readOnly: false, allowScript: true }, 9793) // allowIncognito 走默认 false
+  const launch = await call(tools, 'browser_profile', { action: 'launch' })
+  check('allowIncognito 默认 false：launch 被拦下（blocked_by_policy / not_started）',
+    launch.ok === false && launch.code === 'blocked_by_policy' && launch.effectState === 'not_started',
+    `${launch.code}/${launch.effectState}｜${(launch.message ?? '').slice(0, 60)}`)
+  check('allowIncognito：拒因点名开关名，并说清还要浏览器那层无痕权限',
+    /allowIncognito/.test(launch.message ?? '') && /无痕\/InPrivate/.test(launch.message ?? ''),
+    (launch.message ?? '').slice(0, 90))
+  const useIso = await call(tools, 'browser_profile', { action: 'use', jar: 'incognito' })
+  check('allowIncognito：use jar=incognito 同样被拦（切过去之后 tabs.open 就会真建窗）',
+    useIso.ok === false && useIso.code === 'blocked_by_policy' && useIso.effectState === 'not_started',
+    `${useIso.code}/${useIso.effectState}`)
+  const useNormal = await call(tools, 'browser_profile', { action: 'use', jar: 'normal' })
+  check('allowIncognito：use jar=normal 永远放行（退出隔离罐是安全方向）',
+    useNormal.ok === true && useNormal.value.jar === 'normal', JSON.stringify(useNormal.value ?? useNormal.code))
+  const status = await call(tools, 'browser_profile', { action: 'status' })
+  check('allowIncognito 关着也允许看一眼 status（它走到链路，报 extension_offline）',
+    status.ok === false && status.code === 'extension_offline', status.code)
+  const closeRes = await call(tools, 'browser_profile', { action: 'close' })
+  check('allowIncognito 关着也不拦 close（关掉隔离实例永远是安全方向）',
+    closeRes.ok === false && closeRes.code === 'extension_offline', closeRes.code)
+  await dispose()
+}
+
+// 开关打开之后：launch 放行（走到链路），readOnly 仍然拒。
+{
+  const { tools, dispose } = await boot({ readOnly: false, allowScript: true, allowIncognito: true }, 9796)
+  const launch = await call(tools, 'browser_profile', { action: 'launch' })
+  check('allowIncognito:true：launch 走到链路（extension_offline 而不是被闸门拦）',
+    launch.ok === false && launch.code === 'extension_offline', launch.code)
+  const useIso = await call(tools, 'browser_profile', { action: 'use', jar: 'incognito' })
+  check('allowIncognito:true：use jar=incognito 放行', useIso.ok === true && useIso.value.jar === 'incognito', JSON.stringify(useIso.value ?? useIso.code))
+  await dispose()
+}
+{
+  const { tools, dispose } = await boot({ readOnly: true, allowScript: true, allowIncognito: true }, 9797)
+  const launch = await call(tools, 'browser_profile', { action: 'launch' })
+  check('readOnly：即便 allowIncognito 打开，launch 仍被只读档拒绝',
+    launch.ok === false && launch.code === 'blocked_by_policy' && /只读模式已开启（readOnly: true）/.test(launch.message ?? ''),
+    (launch.message ?? '').slice(0, 70))
+  const status = await call(tools, 'browser_profile', { action: 'status' })
+  check('readOnly：profile.status 在白名单里，放行', status.ok === false && status.code === 'extension_offline', status.code)
+  await dispose()
 }
 
 console.log(fails === 0 ? '\n本机策略闸门全部符合契约' : `\n${fails} 项失败`)

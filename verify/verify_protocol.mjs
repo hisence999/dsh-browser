@@ -37,5 +37,24 @@ check("完全不声明协议的旧扩展 → 兼容 + 记为 0", silent.protocol
 const future = await helloOf({ protocol: 2 });
 check("扩展比桥新一版 → 不兼容且给出方向", future.protocolCompatible === false && /v2/.test(future.protocolNote || ""), future.protocolNote);
 
+// 无痕权限（第 3 项的隔离实例唯一的硬前提）跟着握手一起过来。握手字面量是**手写**的
+// ——上一版就漏过：扩展明明发了 `incognitoAllowed`，桥把它丢了，设置页那行于是永远显示
+// 「—」。三种取值都要钉：true / false / 老扩展根本没有这个字段（那时是「不知道」，
+// 不是「没权限」，两者的界面文案完全不同）。
+const incognitoYes = await helloOf({ protocol: BRIDGE_PROTOCOL_VERSION, incognitoAllowed: true });
+check("握手带 incognitoAllowed:true → 原样留在 status.hello 里",
+  incognitoYes.hello?.incognitoAllowed === true, JSON.stringify(incognitoYes.hello));
+const incognitoNo = await helloOf({ protocol: BRIDGE_PROTOCOL_VERSION, incognitoAllowed: false });
+check("握手带 incognitoAllowed:false → 也是原样保留（不能被 falsy 判断吃掉）",
+  incognitoNo.hello?.incognitoAllowed === false, JSON.stringify(incognitoNo.hello));
+const incognitoLegacy = await helloOf({ protocol: BRIDGE_PROTOCOL_VERSION });
+check("老扩展不带这个字段 → 保持 undefined（「不知道」不等于「没权限」）",
+  incognitoLegacy.hello !== undefined && incognitoLegacy.hello.incognitoAllowed === undefined,
+  JSON.stringify(incognitoLegacy.hello));
+const incognitoJunk = await helloOf({ protocol: BRIDGE_PROTOCOL_VERSION, incognitoAllowed: "yes" });
+check("字段类型不对（字符串）→ 不猜，仍然 undefined",
+  incognitoJunk.hello !== undefined && incognitoJunk.hello.incognitoAllowed === undefined,
+  JSON.stringify(incognitoJunk.hello));
+
 console.log(`\n结论：${fails === 0 ? "协议握手全部通过" : fails + " 项未通过"}`);
 process.exit(fails ? 1 : 0);

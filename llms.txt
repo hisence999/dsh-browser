@@ -5,7 +5,8 @@ Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱�
 ## 文件结构
 
 - `extension/` - Chrome MV3 扩展（background.js Service Worker + popup UI）
-- `src/` - dsh 插件源码（WebSocket 桥 + HTTP 面 + `browser_*` 工具）
+- `src/` - dsh 插件源码（WebSocket 桥 + HTTP 面 + `browser_*` 工具 + 设置页同源路由）
+- `client.js` - 设置页「浏览器控制」的浏览器半边（`settings.section` 槽，无构建链）
 - `lib/` - 构建产物，按约定提交（npm 包只含宿主侧这一份，没有浏览器端模块）
 - `verify/` - 纯 node 实测台，`npm run verify` 跑完（见 `verify/README.md`）
 - `install.sh` - 旧「复制进 harness 源码树」方式的安装脚本（v1.0.2 及以前）
@@ -28,16 +29,50 @@ Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱�
 - WS 升级校验 `Host` 必须是回环（挡 DNS 重绑定）并拒绝网页 `Origin`，只放行 `*-extension://` 与无 Origin 的本机客户端
 - 所有 HTTP 响应都不带 `Access-Control-Allow-Origin`
 - `/` 与 `/api/status` 免鉴权，只报链路状态
-- 两个本机策略开关（profile 的 `browser-bridge` 配置）：`readOnly: true` 拒绝一切会改变页面/浏览器状态或删本机文件的命令，`allowScript: false` 单独关掉 `browser_evaluate`（它能做其它所有工具能做的事）。闸门在把命令发给扩展**之前**，所以被拒的调用零副作用；它们只约束模型那条工具面，HTTP 面按同一 token 走、不受影响，也**不是**防有权限的人
+- 两个本机策略开关（profile 的 `browser-bridge` 配置）：`readOnly: true` 拒绝一切会改变页面/浏览器状态或删本机文件的命令，`allowScript: false` 单独关掉 `browser_evaluate` 与 `browser_cdp`（两者都能在页面里执行任意脚本）。闸门在把命令发给扩展**之前**，所以被拒的调用零副作用；它们只约束模型那条工具面，HTTP 面按同一 token 走、不受影响，也**不是**防有权限的人
+- `lazyToolDocs: true` 只改工具描述（换成一行短桩），完整用法由 `browser_help` 按需返回；参数 schema 不变，不是安全边界
+- `allowRawCdp`（默认 true）控制是否注册 `browser_cdp`：原生 CDP 透传，受 `readOnly` / `allowScript` 约束，结果 20 000 字符截断并报真实大小
 - 扩展弹窗里的「锁定」是另一层：只有人工通道能开与关，冻结期间命令在扩展的 `runCommand` 入口就被拒绝（连接保持），读不出锁状态时按冻结处理（fail-closed）
 - `browser_hold`（接管浮层）是**软层**：它告诉用户模型在操作这一页并挡住误触，用户双击即可关掉；卡片上按「中止操作」后扩展拒绝 `click`/`input`/`press`/`nav`，但模型可以调 `hold action=off` 解除。它不是安全边界，也不是防逃逸手段——要冻住浏览器用扩展弹窗里的「锁定」
+- `agentHighlight`（v1.1.4）那圈渐变描边同理，而且更轻：它是页面里一层 `pointer-events: none` 的**装饰**，不拦任何命令、不进模型可见内容，关掉它不影响任何闸门
+
+## 与用户不冲突（v1.1.2+，第 4 项）
+- 每条扩展命令的 params 由 `BridgeController.execute()` 统一盖一个 `policy` 信封：`{focus, tabs, takeover}`。扩展**不持有**任何策略状态（每次现读），所以改配置下一条命令立刻生效，不存在「插件改了、扩展还拿着旧推送」的静默漂移
+- `owned`（归属）：`tabs.open` 开的标签页记进 `chrome.storage.session`；**用户把标签页拖进 AI 自己那个组也算认领**（组按 **groupId** 认，记在 session 里；同名不合并，用户自己建的组不算，见 v1.1.4 一节），所以不需要新命令——`tabs.group` 就是认领、`tabs.ungroup` 就是放手
+- `agentTargetTabId`（默认目标）：认领过标签页之后，不带 `tabId` 的命令钉在它上面，不再跟着用户的视线跑；全新会话行为与以前一致（跟着当前标签页）
+- `tabs.close/closeMany` 默认只关 `owned` 的：不是 AI 开的进 `refused:[{tabId, reason:'not_owned_by_agent'}]`，`chrome.tabs.remove` 收不到它（零副作用）；要关必须 `force: true`
+- `tabWindow`：`current`（默认，用户当前窗口）/ `new`（`windows.create({focused:false})`，不抢焦点）
+- `focusPolicy`：`avoid`（默认，**绝不** `windows.update({focused:true})`；CDP 输入不需要 OS 焦点）/ `auto`（旧行为）。结果带 `focus`，唯一升级场合是 `type` 模式读回空串（标 `focusedFallback`）
+- `userTakeover`：`yield`（默认）/ `ignore`。**v1.1.5 起判定信号是「真实输入」**：只认页面里 `isTrusted` 的 `pointerdown`（鼠标/笔）/ `click`（触屏）/ `keydown` / `input` / `paste`——切换标签页、切窗口、打开扩展弹窗、**滚动（滚轮 / 键盘翻页键 / 拖滚动条 / 触屏滑动）都不算接管**。命中后写命令被拒，错误前缀 `browser-yielded-to-user:` → `yielded_to_user` + `not_started`，零 CDP。四条解除路径：用户在别的标签页上动手 / 用户切到自己的标签页 / 所有窗口失焦 / `tabs.activate` 显式要回来；AI 也可以自己 `tabs.open` 换个标签页继续。被拦的命令是 `click`/`input`/`press`/`nav`/`scroll` **加 `tabs.close*`**（关掉不可恢复）；`tabs.close*` 带 `force:true` 时放行（= 用户明确让我关）
+- 接管探针：`Runtime.addBinding('__dshUserInput')` + 一段自包含的页面侧函数（`Runtime.evaluate` 注入，无新增权限、无 content script），**只装在 AI 自己的标签页上**（认领时装、导航完成后重装、附着断掉时清记录）。只认 `isTrusted` 所以 `browser_evaluate` 里的 `.click()` 不会把模型自己判成接管；我们 `Input.dispatch*` 派发的事件在页面里也是 `isTrusted`，靠 **400ms 抑制窗**（`SELF_INPUT_MS`）压掉，否则 AI 每点一下就把自己锁死一次
+- 旧 HTTP 面 `/api/command` 不经过工具层，因此不带 `policy` 信封，扩展按自己的默认值跑（与 `readOnly` / `allowScript` 只管模型那条工具面是同一套说法）
+
+## 隔离实例（v1.1.3+，第 3 项）
+
+- 隔离实例 = 一个**无痕窗口**（独立 cookie 罐，退出即清）：`browser_profile` 的 `status` / `launch` / `use` / `close` 四个动作，对应扩展命令 `profile.status`（读）/ `profile.launch` / `profile.close`
+- `manifest.incognito` 从 `not_allowed` 改成 `spanning`（扩展的默认模式）：一个实例就看得到两个罐，`tab.incognito` 足以分辨。**不需要**双扩展进程 + 多实例桥——隔离要的是罐，不是进程；真需要第二份持久登录时（独立 Chrome profile）才上多实例路由
+- 两道人工授权缺一不可：配置 `allowIncognito: true`（默认关，`policy.launch` 与 `use jar=incognito` 共用这道闸门，因为切过去之后 `tabs.open` 就会真的建窗）+ 浏览器扩展管理页的「在无痕/InPrivate 中允许」。后者是浏览器权限，插件翻不动；缺失时扩展抛 `browser-incognito-unavailable:` → `incognito_unavailable` + `not_started`
+- `policy.jar = 'normal' | 'incognito'` 随每条命令下发：`incognito` 时 `tabs.open` 落在无痕窗口里（结果带 `isolated:true`），`resolveTab` 在没有粘性目标时优先取隔离窗口的当前页；`tabs.list` 每行带 `incognito`、顶层带 `isolatedWindowId`
+- 隔离罐里第 4 项那套照样成立（归属/分组/关闭守卫/让出）；`profile.close` 会连同归属、让出、目标一起清干净
+
+## 分组名可配 / AI 操作高亮（v1.1.4）
+
+- 新配置 `tabGroupTitle`（字符串，默认 `'DSH'`）：**AI 新建标签组时用的名字**。**空串 = 不分组**，所以不能用 `|| 'DSH'` 兜底——「我不要分组」是真实选择，兜底会让它悄悄变回默认组。归一：压平空白 + 限长 40 字符（插件与 `/browser-control/api` 两处同一个上限）。改名字 = 之后新建的组用新名字，已经建好的老组按 id 仍然是 AI 的
+- `browser_tabs` 新参数 `groupTitle`（只在 `open` / `group` 两个 action 有意义）：这一次调用覆盖配置里的组名；空串 = 这一次不分组；省略 = 用 `tabGroupTitle`
+- 组的身份是 **Chrome 的 `groupId`**，不是标题：扩展把「我们建过（或加入过）的组」按 `{groupId: {title, windowId, at}}` 记在 `chrome.storage.session`，归属只认这张表（死掉的 id 查表时剪掉）。**同名不合并**——用户已有一个叫「工作」的组时，AI 用这个名字开标签会**另建一个同名组**，不塞进他的组；用户自己建的组（哪怕叫 `DSH`）不算 AI 的（`tabs.close` 要 `force`、`tabs.ungroup` 不拆它）。反过来**拖进 AI 那个组仍然等于认领**。归组仍然等于认领（`tabs.close` 不必 `force: true`），`tabs.ungroup` 仍然等于放手（单次 `groupTitle` 建的组也拆得掉）。颜色仍固定 `blue`，不跟组名走
+- 为什么按 id 不按标题：`tabGroupTitle` 很容易被设成用户自己也在用的名字，按标题认会让**他的**页面突然 `owned:true`——不必 `force` 就能关、`ungroup` 还会拆掉他的分组，两者都不可逆
+- 高亮层：AI 作为目标的那一页里注入一层 `position: fixed` + `pointer-events: none` 的渐变描边 + 「AI 正在操作」徽标（Shadow DOM 宿主 `id="__dsh_agent_highlight__"`，`data-dsh-hold="highlight"`，所以 `browser_read` / `browser_find` / `browser_snapshot` 都不会把它读成页面内容）。`tabs.open` / `tabs.group` / `tabs.activate` 时画上；用户**真的动手**时变琥珀色「已让出 · 你可以操作」（只是看或滚动仍是蓝色）；标签页关闭、目标换走、拆组放手、桥断开时消失；导航完成后自动重画；`browser_screenshot` 与 `browser_pdf` 期间临时隐藏，不污染截图与 PDF。只画 AI 自己那一页：用户的页不画、也不为画框挂 debugger；`chrome://` 上画不了但命令照常成功
+- 新配置 `agentHighlight`（布尔，默认 `true`）整体关掉高亮。**它是软层里的装饰层，不是安全边界**：和 `browser_hold`（模态提示 + 防误触，真能拦下 `click`/`input`/`press`/`nav`）是两层不同的东西，高亮一条命令都拦不住
 
 ## 关键文件
 
-- `src/index.ts` - 21 个 `browser_*` 工具注册 + settings 接线的版本兼容分支
-- `src/policy.ts` - 三张互不相同的表：只读白名单、脚本命令、插件本地破坏性命令（`browser_cleanup` 不经过 `execute()`，必须自己站闸门）
+- `src/index.ts` - 24 个 `browser_*` 工具注册（含 `browser_help` / `browser_cdp` / `browser_profile`）+ settings 接线的版本兼容分支
+- `src/settings-routes.ts` - 设置页同源 JSON 面 `/browser-control/api`（Host 回环/Origin 信任栅栏 + `configEditor` 持久化）
+- `src/tool-help.ts` - 懒加载短桩与 `browser_help` 的参数归一化（文档来自注册定义本身）
+- `src/policy.ts` - 三张互不相同的表：只读白名单、脚本命令（`eval` / `cdp.call`）、插件本地破坏性命令（`browser_cleanup` 不经过 `execute()`，必须自己站闸门）
+- `client.js` - 设置页「浏览器控制」页面：链路状态（含无痕权限）、四个闸门开关、`allowIncognito` 开关、三个目标/接管下拉（`tabWindow` / `focusPolicy` / `userTakeover`）、`tabGroupTitle` 与 `agentHighlight`（v1.1.4，这一版把排版收紧：状态一屏看完、说明文字进悬停提示）、清理/状态页动作
 - `src/server.ts` - WebSocket 服务 + HTTP 面（鉴权、来源校验、状态页）
 - `src/ws.ts` - RFC 6455 帧编解码
 - `src/errors.ts` - 失败分类：`code` / `effectState` / `hint` 写进模型读得到的那句话
-- `extension/background.js` - CDP 命令分发 + 持久 debugger 附着 + 本地硬锁 + 接管浮层（`hold`）
-- `extension/popup.js` - 弹窗状态 UI 与「锁定」按钮
+- `extension/background.js` - CDP 命令分发 + 持久 debugger 附着 + 本地硬锁 + 接管浮层（`hold`）+ 归属/默认目标/聚焦策略/用户接管让出（v1.1.5 起信号是页面里的真实输入探针）+ 隔离实例（`profile.*`）+ 按 **groupId** 认自己的标签组（`groupTitle`，同名不合并）与 AI 操作高亮层（导航后重画、截图与打印 PDF 时临时隐藏）
+- `extension/popup.js` - 弹窗状态 UI、「锁定」按钮、当前目标标签页与已让出标签页、隔离实例状态

@@ -4,8 +4,8 @@
 // 已经带 `text` 的情况下**又补发一个独立的 `char` 事件**，Chrome 从两处各插一次：
 // 输入框里按一下 `x` 得到 `xx`，按一下 Enter 表单**提交两次**（`browser_type` 的
 // `submit:true` 走的也是这条通道）。同一个仓库里这个坑早就在 `cmdInput` 的 type
-// 模式修过，注释就写着「an explicit char event duplicates the input」，CHANGELOG
-// v1.0.2 也记了一笔——只有 `cmdPress` 没跟上，从 v0.2.0 一直留到 v1.0.15。
+// 模式修过，注释就写着「an explicit char event duplicates the input」——只有
+// `cmdPress` 没跟上，从 v0.2.0 一直留到 v1.0.15。
 //
 // 报告方还有一点更扎心但属实：`verify/` 里以前**没有任何一条**按键事件断言，
 // 对 `browser_press` 只测了模型可见文本。所以这个台子存在的意义就是把

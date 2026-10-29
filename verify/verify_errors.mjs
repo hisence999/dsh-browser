@@ -1,7 +1,7 @@
 // 错误契约实测：分类是否正确、写操作是否被标成「结果未知」、HTTP 面是否把
 // code / effectState / hint 一起回给调用方。
 import net from "node:net";
-import { classify, BridgeError, isWriteCommand, LOCKED_BY_USER_MARKER, LOCK_UNREADABLE_MARKER, HOLD_ABORTED_MARKER } from "../src/errors.ts";
+import { classify, BridgeError, isWriteCommand, LOCKED_BY_USER_MARKER, LOCK_UNREADABLE_MARKER, HOLD_ABORTED_MARKER, YIELDED_TO_USER_MARKER, INCOGNITO_UNAVAILABLE_MARKER } from "../src/errors.ts";
 import { BridgeServer } from "../src/server.ts";
 
 let fails = 0;
@@ -30,6 +30,13 @@ const cases = [
   // 不能因为 click 在写清单里就报 unknown（那等于说「动作可能已经落到页面上」）。
   ["click", "browser-locked-by-user: 本机扩展已被用户锁定：命令 click 被拦下", "locked_by_user", "not_started"],
   ["tabs.close", "browser-lock-unreadable: 扩展读不出本地锁的状态，已按冻结处理", "lock_unreadable", "not_started"],
+  // 用户接管标签页：写命令（click 在写清单里）也必须报 not_started —— 命令一条都没发出去，
+  // 报 unknown「动作可能已经落到页面上」会让模型去做一次不必要的观察甚至补偿性重放。
+  ["click", "browser-yielded-to-user: 用户已经接管了这个标签页（#7）：命令 click 被拦下", "yielded_to_user", "not_started"],
+  ["nav", "browser-yielded-to-user: 用户已经接管了这个标签页（#7）：命令 nav 被拦下", "yielded_to_user", "not_started"],
+  // 无痕权限缺失：`profile.launch` 是写操作（可能多一个窗口），但这一条**一个窗口都没建**，
+  // 所以必须报 not_started。归成 command_failed 的话模型会以为「可能开了一半」而去查窗口。
+  ["profile.launch", "browser-incognito-unavailable: 扩展还没有无痕/InPrivate 访问权限", "incognito_unavailable", "not_started"],
 ];
 for (const [cmd, msg, code, effect] of cases) {
   const e = classify(cmd, new Error(msg));
@@ -97,9 +104,11 @@ check("toJSON() 的 hint 不重复出现在 error 字段里",
     .map((m) => m[1]);
   // 读操作与「重复执行无害」的幂等命令，逐条写理由：新增命令必须在这里做一次判断，
   // 不能默默落在 neither 里。
+  // 第 4 项的读清单 + 第 3 项新增的 profile.status（读命令：只看有几个罐、隔离窗口在哪）
   const classifiedRead = new Set([
     'ping', 'browser.info', 'tabs.list', 'tabs.group', 'tabs.ungroup', // 分组是幂等的：重复归组是空操作
     'content', 'find', 'snapshot', 'screenshot', 'wait', 'console.log', 'network.log', 'network.clear', 'pdf',
+    'profile.status', // 只读：报罐计数与隔离窗口，不动任何东西
   ]);
   const unclassified = commands.filter((c) => !isWriteCommand(c) && !classifiedRead.has(c));
   const wronglyMarked = commands.filter((c) => isWriteCommand(c) && classifiedRead.has(c));
@@ -148,6 +157,36 @@ check("toJSON() 的 hint 不重复出现在 error 字段里",
   check('浮层中止：hint 指路 browser_hold action=off，而不是「换个选择器重试」',
     /browser_hold action=off/.test(held.hint) && !/选择器/.test(held.hint), held.hint.slice(0, 60));
   check('hold 本身按写操作分类（超时/掉线之后重试可能多留一层）', isWriteCommand('hold') === true);
+
+  // 用户接管（让出）是第三条「命令根本没发出去」的线协议前缀。它跟浮层中止很像，
+  // 区别是**谁按的**：中止是用户在浮层上按下，让出是用户只是切到了那个标签页。
+  // 对模型来说两件事的下一步完全不同，所以 code 必须分开：
+  //   中止 → 先问用户，用户同意后用 browser_hold action=off 解除；
+  //   让出 → 不用问，自己新开一个标签页继续，或等用户切走（自动解除）。
+  check('对账：扩展里写着与插件侧逐字相同的让出前缀',
+    bg.includes(`'${YIELDED_TO_USER_MARKER}'`), YIELDED_TO_USER_MARKER);
+  const yielded = classify('click', new Error(`${YIELDED_TO_USER_MARKER} 用户已经接管了这个标签页（#7）：命令 click 被拦下，没有向浏览器发出任何操作。`));
+  check('让出：认成 yielded_to_user 且 effectState=not_started（一条都没发出去）',
+    yielded.code === 'yielded_to_user' && yielded.effectState === 'not_started', `${yielded.code}/${yielded.effectState}`);
+  check('让出：前缀不出现在给模型的那句话里',
+    !yielded.message.includes(YIELDED_TO_USER_MARKER), yielded.message.slice(0, 70));
+  check('让出：hint 给出三条恢复路径里至少两条（自开标签页 / 等用户切走 / activate 要回来）',
+    /browser_tabs action=open/.test(yielded.hint) && /切走/.test(yielded.hint) && /activate/.test(yielded.hint), yielded.hint.slice(0, 90));
+  check('让出与浮层中止是两个 code（下一步不同，不许合并）',
+    yielded.code !== held.code, `${yielded.code} vs ${held.code}`);
+
+  // 隔离实例：这条前缀说的不是「谁拒绝了」，而是「浏览器那层权限从没打开过」。
+  // 归错 code 的代价是模型去道歉 / 换工具，而不是让用户去扩展页点一下开关。
+  check('对账：扩展里写着与插件侧逐字相同的无痕权限前缀',
+    bg.includes(`'${INCOGNITO_UNAVAILABLE_MARKER}'`), INCOGNITO_UNAVAILABLE_MARKER);
+  const noIncognito = classify('profile.launch', new Error(`${INCOGNITO_UNAVAILABLE_MARKER} 扩展还没有无痕/InPrivate 访问权限：请在浏览器扩展管理页打开本扩展的「在无痕模式中允许」`));
+  check('无痕权限：认成 incognito_unavailable 且 effectState=not_started（一个窗口都没建）',
+    noIncognito.code === 'incognito_unavailable' && noIncognito.effectState === 'not_started', `${noIncognito.code}/${noIncognito.effectState}`);
+  check('无痕权限：前缀不留在给模型的那句话里，hint 指向扩展管理页的开关',
+    !noIncognito.message.includes(INCOGNITO_UNAVAILABLE_MARKER) && /无痕\/InPrivate/.test(noIncognito.hint) && /允许/.test(noIncognito.hint),
+    noIncognito.hint.slice(0, 80));
+  check('profile.launch 在写清单里（超时/掉线可能已经多开了一个窗口）', isWriteCommand('profile.launch'));
+  check('profile.status 是只读（不许因为「profile」开头就当写操作）', !isWriteCommand('profile.status'));
 
   check('对账：扩展里写着与插件侧逐字相同的两个锁前缀',
     bg.includes(`'${LOCKED_BY_USER_MARKER}'`) && bg.includes(`'${LOCK_UNREADABLE_MARKER}'`),

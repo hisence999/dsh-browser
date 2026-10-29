@@ -54,6 +54,14 @@ export interface BridgeHello {
   /** Frame-contract revision the extension declared; 0 when it predates versioning. */
   readonly protocol: number
   readonly browser: { readonly name: string; readonly version: string; readonly ua: string }
+  /**
+   * Whether the browser let this extension run in incognito/InPrivate — the one hard
+   * precondition for the isolated instance (`browser_profile`). Absent on older
+   * extensions: undefined means "cannot tell", never "false", because the settings
+   * page must be able to say "—" instead of accusing the user of a permission they
+   * may well have granted.
+   */
+  readonly incognitoAllowed?: boolean
 }
 
 /** Snapshot of the link and in-flight work, served verbatim on `/api/status`. */
@@ -553,7 +561,7 @@ export class BridgeServer {
     const full = this.continuationRemainder
     this.continuationRemainder = ''
     this.continuationOpen = false
-    let msg: { type?: unknown; id?: unknown; ok?: unknown; result?: unknown; error?: unknown; t?: unknown; client?: unknown; version?: unknown; protocol?: unknown; browser?: unknown }
+    let msg: { type?: unknown; id?: unknown; ok?: unknown; result?: unknown; error?: unknown; t?: unknown; client?: unknown; version?: unknown; protocol?: unknown; browser?: unknown; incognitoAllowed?: unknown }
     try {
       msg = JSON.parse(full) as typeof msg
     } catch {
@@ -567,8 +575,11 @@ export class BridgeServer {
         version: typeof msg.version === 'string' ? msg.version : 'unknown',
         protocol: declared,
         browser: (msg.browser ?? { name: 'unknown', version: 'unknown', ua: '' }) as BridgeHello['browser'],
+        // 只在扩展真的报了布尔值时带上它：老扩展不认识这个字段，那时「不知道」与
+        // 「没权限」是两件事（设置页要显示「—」而不是「未允许」）。
+        ...(typeof msg.incognitoAllowed === 'boolean' ? { incognitoAllowed: msg.incognitoAllowed } : {}),
       }
-      this.log(`hello: client=${this.hello.client} v${this.hello.version} protocol=v${declared || '?'} browser=${this.hello.browser.name} ${this.hello.browser.version}`)
+      this.log(`hello: client=${this.hello.client} v${this.hello.version} protocol=v${declared || '?'} browser=${this.hello.browser.name} ${this.hello.browser.version}${this.hello.incognitoAllowed === undefined ? '' : ` incognito=${this.hello.incognitoAllowed ? 'allowed' : 'denied'}`}`)
       const note = this.protocolNote
       if (note !== null) this.log(`protocol mismatch: ${note}`)
       return

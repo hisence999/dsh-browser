@@ -130,7 +130,17 @@ for (const [name, command, args] of [
 //      它们的 items 是 additionalProperties:false + properties:{}，宿主逐键判违规）
 const EXTENSION_SHAPES = [
   ["browser_info", "browser.info", {}, { name: "Chrome", version: "140.0.7339.133", tabs: 4, connected: true, protocol: 1 }],
-  ["browser_tabs", "tabs.list", { action: "list" }, { tabId: 1, tabs: [{ id: 12, url: "https://a.example/", title: "A", active: true }] }],
+  // 第 4 项之后 tabs.list 多了 windowId / owned / yielded 与顶层 agentTargetTabId。
+  // 这几条不是装饰：模型要靠 owned 判断「能不能直接关」，靠 agentTargetTabId 知道
+  // 「我没给 tabId 时命令会打到哪儿」，靠 yielded 知道「用户是不是正占着那一页」。
+  ["browser_tabs", "tabs.list", { action: "list" },
+    { count: 1, activeTabId: 12, agentTargetTabId: 12, isolatedWindowId: 2,
+      tabs: [{ id: 12, url: "https://a.example/", title: "A", active: true, windowId: 1, owned: true, yielded: false, incognito: false }] }],
+  // 隔离实例：模型必须同时看到「现在在哪个罐」和「隔离窗口开没开」，否则它无从判断
+  // 自己刚才那个 open 到底落在用户真实会话里还是无痕罐里。
+  ["browser_profile", "profile.status", { action: "status" },
+    { instance: "normal", incognitoAllowed: true, isolated: { windowId: 7, tabs: 2, active: 21 },
+      normal: { windows: 1, tabs: 5 }, incognito: { windows: 1, tabs: 2 } }],
 ];
 for (const [name, command, args, payload] of EXTENSION_SHAPES) {
   const out = await runTool(name, args, payload, command);
@@ -270,7 +280,7 @@ for (const [name, command, args, payload] of EXTENSION_SHAPES) {
     JSON.stringify(out.value.requests[0]));
 }
 
-// 8) 全 20 条工具的地面真相审计：扩展真实载荷 → 宿主校验器 → 模型可见文本。
+// 8) 全 23 条工具的地面真相审计：扩展真实载荷 → 宿主校验器 → 模型可见文本。
 //    上面几段是逐条深挖，这一段是**广度**：一条都不许漏，因为漏掉的那条就是下一个
 //    「活了 12 个版本没人发现」。每行都断言两件事：value 过得了自己的 schema，
 //    而且这次调用真正要的数据出现在模型看到的文本里（`expect` 是必须命中的片段）。
@@ -287,6 +297,14 @@ const GROUND_TRUTH = [
     { tabId: 3, title: "T", url: "https://p.example/", items: [{ ref: "e41", tag: "button", name: "SUBMIT-GT" }] }, ["[e41]", "SUBMIT-GT"]],
   ["browser_click", "click", { selector: "#pay" },
     { tabId: 3, clicked: true, x: 128, y: 640 }, ["clicked", "128"]],
+  // 聚焦策略必须对模型可见：`avoid` 下「这次没有动用户的窗口」是结果的一部分，
+  // 藏起来的话「AI 抢焦点」只能靠用户凭感觉发现，而模型的自我描述会一直是错的。
+  ["browser_click", "click", { selector: "#pay" },
+    { tabId: 3, clicked: { x: 1, y: 2, tag: "button", text: "Pay" }, hitVerified: true, focus: { policy: "avoid", windowFocused: false, tabActivated: false } },
+    ["\"policy\":\"avoid\"", "\"windowFocused\":false"]],
+  ["browser_type", "input", { selector: "#q", value: "abc" },
+    { tabId: 3, filled: { tag: "input", value: "abc" }, focus: { policy: "avoid", windowFocused: false, tabActivated: false, skipped: "fill-mode" } },
+    ["\"skipped\":\"fill-mode\""]],
   ["browser_type", "input", { selector: "#q", value: "abc" },
     { tabId: 3, filled: true, value: "abc" }, ["filled", "abc"]],
   ["browser_press", "press", { key: "Enter" },
@@ -302,7 +320,18 @@ const GROUND_TRUTH = [
   ["browser_info", "browser.info", {},
     { connected: true, browser: { name: "Chrome", version: "140.0.7339.133" }, tabs: 4, protocol: 1, version: "1.0.12" }, ["Chrome", "connected"]],
   ["browser_tabs", "tabs.list", { action: "list" },
-    { tabs: [{ id: 12, url: "https://tabs.example/page", title: "TAB-GT", active: true }] }, ["TAB-GT", "https://tabs.example/page"]],
+    { count: 2, activeTabId: 12, agentTargetTabId: 13, isolatedWindowId: null,
+      tabs: [
+        { id: 12, url: "https://tabs.example/page", title: "TAB-GT", active: true, windowId: 1, owned: false, yielded: false, incognito: false },
+        { id: 13, url: "https://agent.example/", title: "AGENT-GT", active: false, windowId: 1, owned: true, yielded: true, incognito: false },
+      ] },
+    ["TAB-GT", "https://tabs.example/page", "\"owned\":true", "\"yielded\":true"]],
+  // 隔离实例：status 是读命令，模型要同时看到罐与隔离窗口。`isolated:null` 是合法状态
+  //（还没开），开放 schema 允许它——不像封闭 schema 那样会把 null 判成类型违规。
+  ["browser_profile", "profile.status", { action: "status" },
+    { instance: "normal", incognitoAllowed: true, isolated: { windowId: 7, tabs: 2, active: 21 },
+      normal: { windows: 1, tabs: 5 }, incognito: { windows: 1, tabs: 2 } },
+    ["\"incognitoAllowed\":true", "\"windowId\":7", "\"tabs\":2"]],
   ["browser_evaluate", "eval", { expression: "document.title" },
     { tabId: 3, value: "EVAL-GT" }, ["EVAL-GT"]],
   ["browser_screenshot", "screenshot", {},
@@ -321,6 +350,13 @@ const GROUND_TRUTH = [
   ["browser_hold", "hold", { action: "on", note: "改档中" },
     { tabId: 3, action: "on", active: false, covered: false, note: "改档中", reason: "error-page" },
     ["covered", "error-page", "\"active\":false"]],
+  // browser_help 不经过扩展：它读注册表，所以 command 传 null（假扩展不会收到命令）。
+  ["browser_help", null, {},
+    null, ["browser_click", "browser_help", "browser_cdp"]],
+  // 原生 CDP 透传：结果是一段 JSON 字符串 + 真实大小；模型必须看到方法与那段 JSON。
+  ["browser_cdp", "cdp.call", { method: "Page.captureSnapshot" },
+    { tabId: 3, method: "Page.captureSnapshot", json: "{\"data\":\"CDP-GT\"}", bytes: 16, truncated: false },
+    ["CDP-GT", "Page.captureSnapshot"]],
 ];
 
 // 封闭 schema 的工具里，任何 null 都会打穿调用：宿主 checkValue 只对 undefined 放行
@@ -329,7 +365,7 @@ const GROUND_TRUTH = [
 const CLOSED_SCHEMA = new Set([
   "browser_navigate", "browser_read", "browser_snapshot", "browser_evaluate", "browser_screenshot",
   "browser_cleanup", "browser_console_log", "browser_network_log", "browser_network_clear",
-  "browser_pdf", "browser_emulate",
+  "browser_pdf", "browser_emulate", "browser_help", "browser_cdp",
 ]);
 const hasNull = (v) => v === null
   || (typeof v === "object" && v !== null && Object.values(v).some(hasNull));

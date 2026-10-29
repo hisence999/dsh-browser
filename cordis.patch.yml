@@ -7,7 +7,7 @@
 #         config: { enabled: false }
 - insert:
     - id: browser-bridge
-      name: '@angelky7/dsh-browser-control'
+      name: 'dsh-browser'
       config:
         enabled: true
         port: 9777

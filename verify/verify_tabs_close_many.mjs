@@ -30,12 +30,17 @@ const bootExt = async () => {
 };
 
 /* 1 —— 一批全在：一次调用、数组形态、每个 id 都在结果里 */
+//
+// 注意下面每一条都带 `force: true`：第 4 项给 `tabs.close*` 加了归属守卫——**默认只关
+// AI 自己开过的标签页**，用户自己的标签页要先显式 force。这台子里的标签页是 `model.addTab`
+// 直接造的（不是扩展开的），所以不带 force 全都会被拒。这七节测的是关闭语义本身（批量、
+// 幂等、入参清洗、整批被拒），守卫自己的行为在 §1b 里单独测。
 {
   const { model, ctx } = await bootExt();
   const a = model.addTab(1, "https://a.test");
   const b = model.addTab(1, "https://b.test");
   const c = model.addTab(1, "https://c.test");
-  const r = await ctx.cmdTabsCloseMany({ tabIds: [a, b, c] });
+  const r = await ctx.cmdTabsCloseMany({ force: true, tabIds: [a, b, c] });
   check("一批全在：3 个 id 全进 closed",
     r.requested === 3 && r.closed.join() === [a, b, c].join() && r.alreadyGone.length === 0 && r.failed.length === 0, shape(r));
   check("一批全在：扩展只发了一次 chrome.tabs.remove（不是 N 次往返）", model.calls.remove === 1, `calls=${model.calls.remove}`);
@@ -44,12 +49,43 @@ const bootExt = async () => {
   check("一批全在：标签真的没了", !model.tabs.has(a) && !model.tabs.has(b) && !model.tabs.has(c), `剩余 ${model.tabs.size}`);
 }
 
+/* 1b —— 归属守卫：不是 AI 开的标签页，默认一条都不关 */
+//
+// 这条抓的是一类「输出看着没问题、实际很危险」的实现：把用户自己的标签页也关掉，然后
+// 在结果里报 `closed:[…]`。用户正在看的页面一旦关掉就找不回来，所以判据必须是
+// 「`chrome.tabs.remove` 收到了什么」而不是「返回了什么」——下面第三条就是为此存在的。
+{
+  const { model, ctx } = await bootExt();
+  const mine = (await ctx.cmdTabsOpen({ url: "https://agent.test/" })).tabId;
+  const theirs = model.addTab(1, "https://user.test/");
+  const r = await ctx.cmdTabsCloseMany({ tabIds: [mine, theirs] });
+  check("归属守卫：AI 自己的关掉，用户的那一个进 refused",
+    r.closed.join() === String(mine) && r.refused?.length === 1 && r.refused[0].tabId === theirs, shape(r) + ` refused=${JSON.stringify(r.refused)}`);
+  check("归属守卫：refused 的标签页真的还在（不是只在文案上拒绝）", model.tabs.has(theirs), `剩余 ${model.tabs.size}`);
+  check("归属守卫：refused 的那个压根没进 chrome.tabs.remove（拒绝 = 零副作用）",
+    model.removeCalls.at(-1)?.join() === String(mine), JSON.stringify(model.removeCalls));
+  check("归属守卫：refused 不是 failed（没发生 ≠ 失败，重试不会多关一个）",
+    r.failed.length === 0 && r.closed.length === 1, shape(r));
+
+  const forced = await ctx.cmdTabsCloseMany({ tabIds: [theirs], force: true });
+  check("归属守卫：force:true 才关用户自己的标签页", forced.closed.join() === String(theirs), shape(forced));
+
+  // 用户把标签页拖进 AI 那个组，就是「这一个给你用」的认领手势——于是它可以被关。
+  // 注意「AI 那个组」是按 groupId 记的（不按标题认：用户自己的同名组不能被当成 AI 的），
+  // 所以这里先用 addToAgentGroup 真的建出那个组，再把标签页放进去。
+  const dragged = model.addTab(1, "https://dragged.test/");
+  const group = await ctx.addToAgentGroup(dragged, "DSH");
+  check("前提：建组成功", group.grouped === true, JSON.stringify(group));
+  const claimed = await ctx.cmdTabsCloseMany({ tabIds: [dragged] });
+  check("归属守卫：拖进 AI 分组的标签页算已认领（可以直接关）", claimed.closed.join() === String(dragged), shape(claimed));
+}
+
 /* 2 —— 其中有的早就没了：不许连坐，也不许把已消失的 id 塞进 remove */
 {
   const { model, ctx } = await bootExt();
   const a = model.addTab(1, "https://a.test");
   const b = model.addTab(1, "https://b.test");
-  const r = await ctx.cmdTabsCloseMany({ tabIds: [a, 999_999, b] });
+  const r = await ctx.cmdTabsCloseMany({ force: true, tabIds: [a, 999_999, b] });
   check("有 id 早已不存在：其余两个照样关掉", r.closed.join() === [a, b].join(), shape(r));
   check("有 id 早已不存在：它进 alreadyGone，不进 failed", r.alreadyGone.join() === "999999" && r.failed.length === 0, shape(r));
   check("有 id 早已不存在：交给 remove 的只有还存在的 id（真 Chrome 遇到无效 id 会整批拒绝）",
@@ -60,8 +96,8 @@ const bootExt = async () => {
 {
   const { model, ctx } = await bootExt();
   const a = model.addTab(1, "https://a.test");
-  await ctx.cmdTabsCloseMany({ tabIds: [a] });
-  const again = await ctx.cmdTabsCloseMany({ tabIds: [a] });
+  await ctx.cmdTabsCloseMany({ force: true, tabIds: [a] });
+  const again = await ctx.cmdTabsCloseMany({ force: true, tabIds: [a] });
   check("重试安全：第二次调用不抛错", again !== null && typeof again === "object", shape(again));
   check("重试安全：第二次全部落在 alreadyGone",
     again.requested === 1 && again.closed.length === 0 && again.alreadyGone.join() === String(a) && again.failed.length === 0, shape(again));
@@ -72,9 +108,9 @@ const bootExt = async () => {
 {
   const { model, ctx } = await bootExt();
   const a = model.addTab(1, "https://a.test");
-  const r = await ctx.cmdTabsCloseMany({ tabIds: [a, a, "x", -1, 0, null] });
+  const r = await ctx.cmdTabsCloseMany({ force: true, tabIds: [a, a, "x", -1, 0, null] });
   check("重复与非法 id 被清洗去重", r.requested === 1 && r.closed.join() === String(a), shape(r));
-  const empty = await ctx.cmdTabsCloseMany({ tabIds: [] }).then(() => null, (e) => String(e.message));
+  const empty = await ctx.cmdTabsCloseMany({ force: true, tabIds: [] }).then(() => null, (e) => String(e.message));
   check("空数组合法但无意义：明确报错", empty !== null && /non-empty array/.test(empty), empty);
   const none = await ctx.cmdTabsCloseMany({}).then(() => null, (e) => String(e.message));
   check("完全没有 tabIds：明确报错", none !== null && /non-empty array/.test(none), none);
@@ -84,10 +120,10 @@ const bootExt = async () => {
 {
   const { model, ctx } = await bootExt();
   const a = model.addTab(1, "https://a.test");
-  const r = await ctx.cmdTabsClose({ tabId: a });
+  const r = await ctx.cmdTabsClose({ force: true, tabId: a });
   check("单数 tabs.close 与批量同形状",
     r.requested === 1 && r.closed.join() === String(a) && r.alreadyGone.length === 0 && r.failed.length === 0, shape(r));
-  const gone = await ctx.cmdTabsClose({ tabId: a });
+  const gone = await ctx.cmdTabsClose({ force: true, tabId: a });
   check("单数重复关闭：也是幂等成功（alreadyGone）", gone.alreadyGone.join() === String(a) && gone.failed.length === 0, shape(gone));
   const missing = await ctx.cmdTabsClose({}).then(() => null, (e) => String(e.message));
   check("单数缺 tabId：明确报错", missing !== null && /tabId is required/.test(missing), missing);
@@ -100,7 +136,7 @@ const bootExt = async () => {
   const b = model.addTab(1, "https://b.test");
   model.failRemoveTimes = 1;
   model.removeError = "Tabs cannot be removed";
-  const r = await ctx.cmdTabsCloseMany({ tabIds: [a, b] });
+  const r = await ctx.cmdTabsCloseMany({ force: true, tabIds: [a, b] });
   check("remove 被拒：不抛错，照样收齐结果", r.requested === 2, shape(r));
   check("remove 被拒：两个都进 failed 且带错误文本",
     r.failed.length === 2 && r.failed.every((f) => /cannot be removed/.test(f.error)) && r.closed.length === 0, shape(r));
@@ -115,7 +151,7 @@ const bootExt = async () => {
   const a = model.addTab(1, "https://a.test");
   const b = model.addTab(1, "https://b.test");
   model.removeRejectButClose = 1; // 先真的关掉 a，再让整次调用拒绝
-  const r = await ctx.cmdTabsCloseMany({ tabIds: [a, b] });
+  const r = await ctx.cmdTabsCloseMany({ force: true, tabIds: [a, b] });
   check("拒了但有一个其实已关：已关的报 closed（副作用没被藏起来）", r.closed.join() === String(a), shape(r));
   check("拒了但有一个其实已关：还在的才进 failed", r.failed.length === 1 && r.failed[0].tabId === b, shape(r));
   check("拒了但有一个其实已关：请求总数仍然如实回报", r.requested === 2, shape(r));
@@ -181,23 +217,32 @@ const closeTabs = async (args) => {
 
 {
   const one = await closeTabs({ action: "close", tabId: 7 });
+  // 只逐个字段比，不整对象比：`execute()` 会给每条命令盖一个 policy 信封
+  // （默认目标/聚焦/让出三档，见 src/index.ts），整对象比对会被这一层无关字段打红。
   check("宿主：单个 id 走 tabs.close（老命令继续被人用，不被新命令架空）",
-    one.commands.join() === "tabs.close" && JSON.stringify(one.params[0]) === JSON.stringify({ tabId: 7 }), JSON.stringify(one.params));
+    one.commands.join() === "tabs.close" && one.params[0].tabId === 7 && one.params[0].tabIds === undefined, JSON.stringify(one.params));
   check("宿主：单个 id 的结果过输出 schema", one.violations.length === 0, one.violations.join(" | "));
 
   const many = await closeTabs({ action: "close", tabIds: [7, 8, 9] });
   check("宿主：多个 id 走**一次** tabs.closeMany（不是 N 次 tabs.close）",
     many.commands.join() === "tabs.closeMany", JSON.stringify(many.commands));
   check("宿主：id 原样送到扩展，顺序不变",
-    JSON.stringify(many.params[0]) === JSON.stringify({ tabIds: [7, 8, 9] }), JSON.stringify(many.params));
+    JSON.stringify(many.params[0].tabIds) === JSON.stringify([7, 8, 9]), JSON.stringify(many.params));
   check("宿主：批量的结果过输出 schema", many.violations.length === 0, many.violations.join(" | "));
   check("宿主：模型可见文本里带着每个 id 的去向（closed/alreadyGone/failed 都能读到）",
     /"requested"/.test(many.text) && /"closed"/.test(many.text) && /"alreadyGone"/.test(many.text) && /"failed"/.test(many.text),
     many.text.slice(0, 160));
 
+  // force 必须真的到扩展：它是「关用户自己的标签页」那条唯一的手动闸门，
+  // 在宿主侧被吞掉就等于模型以为自己拿到了许可、扩展其实一直拒绝它。
+  const forced = await closeTabs({ action: "close", tabId: 7, force: true });
+  check("宿主：force 原样送到扩展", forced.params[0].force === true, JSON.stringify(forced.params));
+  check("宿主：不带 force 时参数里没有这个键（默认必须是拒绝）",
+    !("force" in one.params[0]), JSON.stringify(one.params[0]));
+
   const both = await closeTabs({ action: "close", tabId: 7, tabIds: [7, 8] });
   check("宿主：tabId 与 tabIds 同时给 → 去重成一次批量，且 7 只出现一次",
-    both.commands.join() === "tabs.closeMany" && JSON.stringify(both.params[0]) === JSON.stringify({ tabIds: [7, 8] }),
+    both.commands.join() === "tabs.closeMany" && JSON.stringify(both.params[0].tabIds) === JSON.stringify([7, 8]),
     JSON.stringify(both.params));
 
   const none = await closeTabs({ action: "close" }).then(() => null, (e) => String(e.message));

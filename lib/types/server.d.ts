@@ -42,6 +42,14 @@ export interface BridgeHello {
         readonly version: string;
         readonly ua: string;
     };
+    /**
+     * Whether the browser let this extension run in incognito/InPrivate — the one hard
+     * precondition for the isolated instance (`browser_profile`). Absent on older
+     * extensions: undefined means "cannot tell", never "false", because the settings
+     * page must be able to say "—" instead of accusing the user of a permission they
+     * may well have granted.
+     */
+    readonly incognitoAllowed?: boolean;
 }
 /** Snapshot of the link and in-flight work, served verbatim on `/api/status`. */
 export interface BridgeServerStatus {

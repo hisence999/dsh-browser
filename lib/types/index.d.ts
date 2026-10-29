@@ -22,6 +22,8 @@ import z from '@deepseek-ai/schemastery';
 export { LOCAL_DESTRUCTIVE_COMMANDS, PAGE_MUTATING_COMMANDS, READ_ONLY_ALLOWED, SCRIPT_COMMANDS, policyRefusal } from './policy.ts';
 /** Cordis plugin name used by loader diagnostics. */
 export declare const name = "browser-bridge";
+/** npm package name whose profile row the Settings page edits. */
+export declare const PACKAGE_NAME = "dsh-browser";
 /** The tool registry this plugin contributes `browser_*` tools to. */
 export declare const inject: string[];
 /** Settings namespace carrying the bridge switch and endpoint options. */
@@ -56,6 +58,72 @@ export interface Config {
      * alone does not take arbitrary code off the table.
      */
     allowScript?: boolean;
+    /**
+     * Load tool descriptions on demand instead of shipping all of them in every
+     * request. On: each `browser_*` schema carries a one-line stub and
+     * `browser_help` returns the full description/parameter table for a name.
+     * Off by default, so the first-run experience is unchanged.
+     */
+    lazyToolDocs?: boolean;
+    /**
+     * Allow `browser_cdp`, the raw CDP escape hatch. On by default; it is still
+     * refused by `readOnly` and by `allowScript: false`, because every CDP
+     * domain — `Runtime.evaluate` included — is reachable through it.
+     */
+    allowRawCdp?: boolean;
+    /**
+     * Allow the isolated instance — `browser_profile` launching/closing an
+     * incognito window (its own cookie jar, wiped when it closes), and pointing
+     * later commands at that jar.
+     *
+     * Off by default: the isolated instance needs **two** human authorisations —
+     * this switch, and the browser's own "Allow in incognito/InPrivate" toggle on
+     * the extension's management page. We deliberately do not add a third
+     * automatic channel: both of those are the user's decisions, and a model that
+     * could open an incognito window on its own would also gain a way to reach a
+     * signed-in site the user never pointed it at.
+     */
+    allowIncognito?: boolean;
+    /**
+     * Where `browser_tabs action=open` puts a new tab: `current` opens it in the
+     * window the user is looking at and collects it into the DSH group, `new`
+     * opens a separate window that is deliberately not focused. Exists because
+     * the agent's tabs are the user's visual mess: one default cannot fit both
+     * "work visibly next to me" and "get out of my window".
+     */
+    tabWindow?: 'current' | 'new';
+    /**
+     * `avoid` never raises a window to the foreground. Real input events go
+     * through CDP, which never needed OS focus, so the old
+     * `windows.update({focused: true})` was only ever cosmetic — and it is the
+     * most visible way an agent hijacks the user's desktop. `auto` restores it.
+     */
+    focusPolicy?: 'avoid' | 'auto';
+    /**
+     * What the extension does when the user visits a tab the agent is driving:
+     * `yield` refuses the next page-mutating command there and says how to
+     * continue, `ignore` keeps going. Defaults to `yield` because typing and
+     * clicking on the same page at the same time destroys both sides' work.
+     */
+    userTakeover?: 'yield' | 'ignore';
+    /**
+     * Name of the Chrome tab group AI-opened tabs collect into.
+     *
+     * The tab strip is the user's own space, so the label has to be theirs to
+     * choose — `DSH` is only the default. An **empty string means "do not group
+     * at all"**, which is why it cannot be `|| 'DSH'`-defaulted away: "I do not
+     * want a group" is a real preference, not a missing value.
+     */
+    tabGroupTitle?: string;
+    /**
+     * Draw the blue gradient frame around the tab the agent is driving.
+     *
+     * Purely visual: a `pointer-events: none` overlay injected into the page, so
+     * it never intercepts a click, and it is hidden again while a screenshot is
+     * taken. On by default, because "which page is the machine touching right
+     * now" is exactly the question a user watching their own browser asks.
+     */
+    agentHighlight?: boolean;
 }
 export declare const Config: z<Config>;
 /** Cordis plugin entry: wire the settings-driven lifecycle plus the model-facing tools. */

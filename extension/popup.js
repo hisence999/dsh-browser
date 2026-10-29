@@ -43,6 +43,28 @@ function render(status) {
 			? '已冻结：扩展会拒绝模型的全部浏览器操作（连接保持）。点「已锁定」解除。'
 			: '锁定 = 冻结模型的全部浏览器操作，连接不断。解锁只能在这里点。';
 	hint.className = locked ? 'lockhint on' : 'lockhint';
+	// 默认目标与让出：用户需要知道模型现在默认打在哪一页、以及自己是不是正把那页「占着」。
+	const agent = status.agent ?? {};
+	const target = Number.isInteger(agent.targetTabId) ? agent.targetTabId : null;
+	const yielded = Array.isArray(agent.yielded) ? agent.yielded : [];
+	const isolated = Number.isInteger(agent.isolatedWindowId) ? agent.isolatedWindowId : null;
+	const incognitoAllowed = agent.incognitoAllowed === true;
+	const agentHint = $('agenthint');
+	if (yielded.length > 0) {
+		agentHint.textContent = `已让出 #${yielded.join('、#')}：你接管了模型的工作标签页，它在那页上的操作被拦下。你切到别的标签页即自动解除。`;
+		agentHint.className = 'agenthint yield';
+	} else if (isolated !== null) {
+		agentHint.textContent = `隔离实例已开（无痕窗口 #${isolated}）：模型可以在里面登录、试流程，退出即清，不碰你的会话。`;
+		agentHint.className = 'agenthint';
+	} else if (target !== null) {
+		agentHint.textContent = `模型的工作标签页 #${target}：不带标签页参数的命令都打在这一页上。`;
+		agentHint.className = 'agenthint';
+	} else {
+		agentHint.textContent = incognitoAllowed
+			? '模型还没认领自己的标签页：默认跟随你正在看的那一页（无痕访问已允许，可以开隔离实例）。'
+			: '模型还没认领自己的标签页：默认跟随你正在看的那一页。';
+		agentHint.className = 'agenthint';
+	}
 	const errorBox = $('error');
 	errorBox.textContent = status.lastError ?? '';
 	errorBox.className = errorBox.textContent.length > 0 ? 'error show' : 'error';

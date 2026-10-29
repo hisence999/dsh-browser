@@ -27,6 +27,8 @@ export type BridgeErrorCode =
 	| 'locked_by_user'       // 扩展弹窗里的本地锁拦下，只有用户能解除
 	| 'lock_unreadable'      // 扩展读不出锁状态，按冻结处理（会自动重读）
 	| 'held_by_user'         // 用户在接管浮层上按了「中止操作」（模型可调 hold off 解除）
+	| 'yielded_to_user'      // 用户接管了那个标签页（写操作让出；用户切走或 tabs.activate 可解除）
+	| 'incognito_unavailable' // 浏览器没给扩展无痕/InPrivate 权限（隔离实例开不出来，玩家得去扩展页打开）
 	| 'command_failed';      // 扩展明确回了失败
 
 /**
@@ -42,6 +44,22 @@ export const LOCKED_BY_USER_MARKER = 'browser-locked-by-user:';
 export const LOCK_UNREADABLE_MARKER = 'browser-lock-unreadable:';
 /** 接管浮层上的「中止操作」。同样的线协议约定：字面量在扩展侧有一份，对账在 `verify_errors.mjs`。 */
 export const HOLD_ABORTED_MARKER = 'browser-hold-aborted:';
+/**
+ * 用户接管了 AI 正在用的那个标签页（切了上去），写操作被让出。
+ *
+ * 与浮层「中止」的区别是**谁按的**：中止是用户在浮层上显式按下，让出是用户只是切到了
+ * 那个标签页。两者的共同点是「命令一条都没发出去」，所以都必须报 `not_started` ——
+ * 否则模型会以为点击可能已经发生，然后去做一次「补偿性」的观察或重放。
+ */
+export const YIELDED_TO_USER_MARKER = 'browser-yielded-to-user:';
+/**
+ * 扩展没有无痕/InPrivate 权限：隔离实例开不出来。
+ *
+ * 这条跟前面几条的区别是**它不是任何人的决定**——不是用户按了锁、也不是用户接管，
+ * 而是浏览器那层的权限开关从没打开过。所以文案要直说去哪儿打开，别让模型以为
+ * 「用户拒绝了」而反复道歉或换工具。
+ */
+export const INCOGNITO_UNAVAILABLE_MARKER = 'browser-incognito-unavailable:';
 
 /** 副作用状态。 */
 export type EffectState =
@@ -66,6 +84,12 @@ export type EffectState =
 const WRITE_COMMANDS = new Set<string>([
 	'nav', 'click', 'input', 'press', 'scroll', 'eval', 'emulate',
 	'tabs.open', 'tabs.close', 'tabs.closeMany', 'tabs.activate', 'dialog',
+	// 隔离实例：开一个无痕窗口 / 把它关掉。重试的代价是**多一个窗口**（或把用户刚在里面
+	// 登录的会话又关一次），所以按写操作报 unknown。
+	'profile.launch', 'profile.close',
+	// 任意 CDP 方法透传：超时/掉线之后重试可能把同一个导航、同一次 cookie 写入
+	// 做两遍，`Network.setCookie` 甚至是不可撤销的。按写操作处理。
+	'cdp.call',
 	// 这条不是扩展命令，而是插件本地命令 `browser_cleanup`：它逐条 rm，中途失败
 	// （Windows 上被占用的截图会 EPERM）时前面的文件已经没了，报 not_started
 	// 就是告诉模型「什么都没发生，重试安全」，而那正好是假的。
@@ -89,6 +113,8 @@ const HINTS: Record<BridgeErrorCode, string> = {
 	cancelled: '调用被取消：按需重新发起，不必当作错误处理。',
 	not_configured: '插件还没读到配置：确认 dsh 已加载本插件（dsh plugin list）后再试。',
 	held_by_user: '这是用户在页面上的接管浮层里按下的「中止操作」，不是故障：命令一条都没有发出。先与用户确认；他同意继续之后调用 browser_hold action=off 解除，然后再继续原来的步骤。不要重试，也不要换成别的工具绕过它。',
+	yielded_to_user: '用户接管了这个标签页（他切到了这一页上），不是故障：命令一条都没有发出。三条恢复路径任选其一——在你自己新开的标签页里继续（browser_tabs action=open）、等用户切走（切走会自动解除）、或由用户确认后 browser_tabs action=activate 把这一页要回来。不要在原地重试，也不要换工具绕过它。',
+	incognito_unavailable: '浏览器没给扩展无痕/InPrivate 权限，所以隔离实例开不出来——这不是故障，也不是谁拒绝了你：请用户在浏览器的扩展管理页打开本扩展的「在无痕模式中允许」（Edge 叫「在 InPrivate 中允许」），然后重试。在那之前请用普通的登录态浏览器继续，并如实告诉用户为什么开不了隔离实例。',
 	blocked_by_policy: '这是本机策略拦下的，不是故障：命令没有发给浏览器（零副作用）。要放开改 profile 的 cordis.patch.yml（browser-bridge 的 readOnly / allowScript）并重启 dsh，或换成本机允许的只读工具；不要原地重试。',
 	locked_by_user: '这是用户在扩展弹窗里按下的「锁定」，不是故障：命令一条都没有发出。请先与用户确认，由他在同一个弹窗里点「已锁定」解除；不要重试，也不要试图改配置绕过它。',
 	lock_unreadable: '扩展这次读不出锁的状态，按冻结处理了：命令没有发出。下一条命令会重新读一次，所以可以再试一次，但不要循环重试；一直如此就请用户重启浏览器或重装扩展。',
@@ -158,11 +184,15 @@ export function classify(command: string, error: unknown): BridgeError {
 	const locked = raw.startsWith(LOCKED_BY_USER_MARKER) ? 'locked_by_user' as const
 		: raw.startsWith(LOCK_UNREADABLE_MARKER) ? 'lock_unreadable' as const
 			: raw.startsWith(HOLD_ABORTED_MARKER) ? 'held_by_user' as const
-				: undefined
+				: raw.startsWith(YIELDED_TO_USER_MARKER) ? 'yielded_to_user' as const
+					: raw.startsWith(INCOGNITO_UNAVAILABLE_MARKER) ? 'incognito_unavailable' as const
+						: undefined
 	const markerLength = locked === 'locked_by_user' ? LOCKED_BY_USER_MARKER.length
 		: locked === 'lock_unreadable' ? LOCK_UNREADABLE_MARKER.length
 			: locked === 'held_by_user' ? HOLD_ABORTED_MARKER.length
-				: 0
+				: locked === 'yielded_to_user' ? YIELDED_TO_USER_MARKER.length
+					: locked === 'incognito_unavailable' ? INCOGNITO_UNAVAILABLE_MARKER.length
+						: 0
 	const message = locked ? raw.slice(markerLength).trim() : raw
 	// 写操作一旦超时或掉线，结果就是未知的；读操作永远可以安全重试。
 	const unknownIsPossible = isWriteCommand(command)
@@ -178,7 +208,10 @@ export function classify(command: string, error: unknown): BridgeError {
 	const effectState: EffectState = code === 'command_timeout' || code === 'link_lost'
 		? (unknownIsPossible ? 'unknown' : 'not_started')
 		: code === 'command_failed'
-			? (unknownIsPossible ? 'unknown' : 'not_started')
+			// 「扩展不认识这条命令」是它自己抛的、发生在 handler 之前：命令一条都没
+			// 发出去。写操作按默认规则会报 unknown（「可能已经落到页面上」），对这个
+			// 分支恰好是假的（典型场景：插件比扩展新，新命令撞上旧扩展）。
+			? (/unknown command/i.test(message) ? 'not_started' : (unknownIsPossible ? 'unknown' : 'not_started'))
 			: 'not_started'
 	return new BridgeError(command, code, effectState, message)
 }
