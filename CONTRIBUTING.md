@@ -10,10 +10,12 @@
 ## 开发流程
 
 ```bash
-npm install
-npm run check     # tsc --noEmit + tsdown 构建 + publint
-npm run verify    # verify/ 里的实测台，会占用 127.0.0.1:9777
+pnpm install --frozen-lockfile   # 必须按 lockfile 装：node_modules 一漂移，lib/ 就会与 CI 重建的结果不同
+pnpm run check     # tsc --noEmit + tsdown 构建 + publint
+pnpm run verify    # verify/ 里的实测台，会占用 127.0.0.1:9777
 ```
+
+> CI 有一道闸门会**重新构建** `lib/` 并要求与提交的产物逐字节一致。本机用 `npm install` 装出来的依赖树与 `pnpm-lock.yaml` 解析结果不同（同一份 `tsdown` 也可能带到不同版本的 rolldown），重建出来的产物会多出 `//#region` 注释块，于是这道闸门必红。改完 `src/` 要重建时，先 `pnpm install --frozen-lockfile`。
 
 `npm run verify` 覆盖的是：配置解析（包内 patch 与 schema 默认谁赢）、三种宿主形状下 `apply()` 的行为、HTTP 面的鉴权与 WebSocket 升级来源、以及**发布产物 `lib/index.js`** 的同样行为。每条 issue 的结论都应能在这里复现，别把推断当实测。
 

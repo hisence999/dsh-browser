@@ -10,10 +10,12 @@
 ## Development workflow
 
 ```bash
-npm install
-npm run check     # tsc --noEmit + tsdown build + publint
-npm run verify    # the harnesses under verify/, binds 127.0.0.1:9777
+pnpm install --frozen-lockfile   # install from the lockfile: a drifted node_modules makes lib/ differ from CI's rebuild
+pnpm run check     # tsc --noEmit + tsdown build + publint
+pnpm run verify    # the harnesses under verify/, binds 127.0.0.1:9777
 ```
+
+> CI **rebuilds** `lib/` and requires the committed artifact to match byte for byte. A dependency tree installed with `npm install` differs from what `pnpm-lock.yaml` resolves (the same `tsdown` may pull a different rolldown), so the rebuild gains `//#region` comment blocks and that gate always fails. Run `pnpm install --frozen-lockfile` before rebuilding after a `src/` change.
 
 `npm run verify` covers: config resolution (which wins, the in-package patch or the schema default), `apply()` against three host shapes, HTTP authentication plus WebSocket upgrade origin, and the same behaviour of the **published artifact `lib/index.js`**. Every issue conclusion should be reproducible there; do not ship an inference as a measurement.
 
