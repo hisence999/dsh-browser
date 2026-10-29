@@ -49,9 +49,11 @@ For "use **my own** browser" work (logged-in Bilibili, Zhihu, admin panels) use 
 
 ## Install
 
+> No clone needed: grab `dsh-browser-vX.Y.Z.zip` (extension) and `dsh-browser-plugin-vX.Y.Z.zip` (plugin) from [Releases](https://github.com/hisence999/dsh-browser/releases/latest); the checksums are in that release body.
+
 ### 1. The Chrome extension
 
-Open `chrome://extensions` → enable Developer mode → "Load unpacked" → pick this repository's `extension/` directory. Requires Chrome/Edge 116+.
+Open `chrome://extensions` → enable Developer mode → "Load unpacked" → pick this repository's `extension/` directory (or the folder you unzipped from the release). Requires Chrome/Edge 116+.
 
 A whale icon with a breathing green dot in the toolbar means it is connected.
 

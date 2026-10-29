@@ -49,9 +49,11 @@ Chrome 扩展（chrome.debugger / CDP）
 
 ## 安装
 
+> 不想 clone？到 [Releases](https://github.com/hisence999/dsh-browser/releases/latest) 下载 `dsh-browser-vX.Y.Z.zip`（扩展）与 `dsh-browser-plugin-vX.Y.Z.zip`（插件）两个离线包，校验和写在那个 Release 的正文里。
+
 ### 1. Chrome 扩展
 
-打开 `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选本仓库的 `extension/` 目录。需要 Chrome/Edge 116+。
+打开 `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选本仓库的 `extension/` 目录（用离线包的话，选解压出来的那个目录）。需要 Chrome/Edge 116+。
 
 工具栏出现鲸鱼图标、绿点呼吸 = 已连上桥。
 
