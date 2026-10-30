@@ -9,6 +9,7 @@ Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱�
 - `client.js` - 设置页「浏览器控制」的浏览器半边（`settings.section` 槽，无构建链）
 - `lib/` - 构建产物，按约定提交（npm 包只含宿主侧这一份，没有浏览器端模块）
 - `verify/` - 纯 node 实测台，`npm run verify` 跑完（见 `verify/README.md`）
+- `docs/BEHAVIOR.md` - 扩展与插件的完整行为说明；`docs/SESSION-SCOPED-TOOLS.md` - 宿主工具作用域机制与「把工具装进当前会话」的实现原理（写插件前先看这份）
 - `install.sh` - 旧「复制进 harness 源码树」方式的安装脚本（v1.0.2 及以前）
 - `cordis.patch.yml` - 插件挂载配置（`enabled: true`，与 schema 默认保持一致）
 - `dsh-config/` - dsh 配置项参考

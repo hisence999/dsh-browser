@@ -207,6 +207,8 @@ AI 作为**目标**的那一页里会画一圈描边 + 一个「AI 正在操作�
 
 ## 工具懒启动（`lazyToolDocs`）
 
+机制层面的实现原理（为什么用 `agent.ctx`、落层怎么判定、怎么验证）单独一份：[SESSION-SCOPED-TOOLS.md](SESSION-SCOPED-TOOLS.md)。
+
 profile 里给 `browser-bridge` 打开 `lazyToolDocs: true`（或设置页开关）后，工具面从「全开」变成「一个装载器」：
 
 | 维度 | 行为 |

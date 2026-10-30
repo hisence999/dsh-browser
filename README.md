@@ -116,6 +116,8 @@ Chrome 浏览器
 - **策略随每条命令下发**（`params.policy` 信封）：扩展不保存策略副本，配置改了下一条命令立刻生效，不存在「切了配置没生效」的中间态。
 - **协议版本独立于版本号**：帧契约变了才升，不匹配时状态页直接写出该升级哪一侧。
 
+行为细节见 [docs/BEHAVIOR.md](docs/BEHAVIOR.md)；要写插件、想知道「工具怎么装进当前会话」，看 [docs/SESSION-SCOPED-TOOLS.md](docs/SESSION-SCOPED-TOOLS.md)。
+
 ## 工具清单
 
 | 工具 | 功能 |
