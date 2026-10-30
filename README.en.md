@@ -145,7 +145,7 @@ Chrome browser
 | `browser_cleanup` | Delete screenshots and scratch files |
 | `browser_tools` | Loader: appears only in lazy mode; give it tool names, a group name, or `"*"` to load them |
 
-23 tools in total. Fully open by default: all 23 are registered for the model; turning on "lazy tools" leaves only `browser_tools` exposed, and it loads the rest on demand (each loaded definition is byte-identical to the eager one). `verify/verify_surface.mjs` reconciles this surface against the extension's command table; drift makes `npm run verify` fail.
+23 tools in total. Fully open by default: all 23 are registered for the model; turning on "lazy tools" leaves only `browser_tools` exposed, and it loads the rest on demand (each loaded definition is byte-identical to the eager one). A load applies to the session that asked for it: other sessions still see only the loader, and the loaded tools go away when that session ends. `verify/verify_surface.mjs` reconciles this surface against the extension's command table; drift makes `npm run verify` fail.
 
 ## License
 
