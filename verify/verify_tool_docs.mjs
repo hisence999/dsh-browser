@@ -4,7 +4,9 @@
 //   1) 懒启动只决定「暴不暴露」，**描述与参数一个字节都不许变** —— 装上的工具
 //      必须和全开模式下的定义逐字节相同（不能有第二份、更不能有桩描述）；
 //   2) 全开模式不该有装载器，懒启动模式不该有第二个入口 —— 只有一个 browser_tools；
-//   3) 分组表是模型唯一的发现入口，必须恰好覆盖每个工具一次（新加工具忘了归组就红）。
+//   3) 分组表是模型唯一的发现入口，必须恰好覆盖每个工具一次（新加工具忘了归组就红）；
+//   4) 装载是**会话级**的：装进当前 agent 的作用域，别的会话看不见，会话结束自己收掉；
+//      没有会话作用域时退回全局层，但要如实读回并报出来（不许拿意图当事实）。
 //
 // 用法：node verify/verify_tool_docs.mjs
 import { readFileSync } from 'node:fs'
@@ -43,15 +45,26 @@ function boot(extra) {
         logger: ctx.logger,
       })
     },
-    tools: { register: (def) => { tools.set(def.name, def) } },
+    tools: {
+      register: (def) => { tools.set(def.name, def); return () => { tools.delete(def.name) } },
+      get: (name) => tools.get(name),
+    },
     systemPrompt: { section: (section) => sections.push(section) },
   }
   apply(ctx, Config({ enabled: false, port: 9793, token: 'tool-docs-test', ...extra }))
   return { tools, sections, disposers }
 }
 
-const call = async (definition, args) => {
-  const value = await definition.execute(args, { signal: new AbortController().signal })
+/** 模拟插件卸载：跑一遍 `ctx.effect` 的本体，拿到各自的摘除函数再执行。 */
+const teardown = (booted) => {
+  for (const body of booted.disposers) {
+    const off = body()
+    if (typeof off === 'function') off()
+  }
+}
+
+const call = async (definition, args, exec) => {
+  const value = await definition.execute(args, { signal: new AbortController().signal, ...(exec ?? {}) })
   const schemaViolations = validateJsonSchemaValue(definition.output.schema, value, 'value')
   const blocks = definition.output.render(args, value)
   const text = blocks.map(part => part.text ?? '').join('\n')
@@ -229,6 +242,94 @@ check('"*" 之后 exposed 报的清单不含装载器自己（它不是可调用
   check('源码里没有任何「描述按需加载」的英文桩话', !/loaded on demand/i.test(toolHelp) && !/loaded on demand/i.test(index))
   check('源码里已经没有 browser_help', !/browser_help/.test(index))
   check('src/index.ts 的懒分支只注册一个工具（browser_tools）', /name: 'browser_tools'/.test(index))
+}
+
+// ---- 11) 会话级装载：按 agent 隔离，别的会话看不见，插件卸载时自己收干净 ----
+{
+  const fakeAgent = (id) => {
+    const scoped = new Map()
+    return {
+      id,
+      tools: scoped,
+      ctx: {
+        tools: {
+          register: (def) => { scoped.set(def.name, def); return () => { scoped.delete(def.name) } },
+          get: (name) => scoped.get(name),
+        },
+      },
+    }
+  }
+  const box = boot({ lazyToolDocs: true })
+  const loaderHere = box.tools.get('browser_tools')
+  const agentA = fakeAgent('session-A')
+  const agentB = fakeAgent('session-B')
+
+  check('装载器描述点明「装载只对本会话生效」', /THIS session only/.test(loaderHere.description),
+    loaderHere.description.slice(0, 80))
+
+  const loadA = await call(loaderHere, { names: ['browser_read'] }, { agent: agentA })
+  check('会话装载：A 装载后 activated 里就是它', stable(loadA.value.activated) === stable(['browser_read']), stable(loadA.value))
+  check('会话装载：注册落进 A 自己的作用域', agentA.tools.has('browser_read'), [...agentA.tools.keys()].join(','))
+  check('会话装载：全局服务面上看不到它（隔离成立）', !box.tools.has('browser_read'),
+    [...box.tools.keys()].join(','))
+  check('会话装载：scope 读回 session（不是靠猜）', loadA.value.scope === 'session', loadA.value.scope)
+  check('会话装载：别的会话 B 的服务面上没有它', !agentB.tools.has('browser_read'))
+
+  const catalogB = await call(loaderHere, {}, { agent: agentB })
+  check('会话装载：B 报目录时仍列着 browser_read（只是 B 没装）',
+    catalogB.value.available.some(row => row.name === 'browser_read') && catalogB.value.exposed.length === 0,
+    `${catalogB.value.available.length}/${catalogB.value.exposed.length}`)
+
+  const loadB = await call(loaderHere, { names: ['browser_read'] }, { agent: agentB })
+  check('会话装载：A 与 B 各装同一件工具互不冲突（全局层会因重名直接炸）',
+    stable(loadB.value.activated) === stable(['browser_read']) && loadB.value.errors === undefined && agentB.tools.has('browser_read'),
+    stable(loadB.value))
+
+  const againA = await call(loaderHere, { names: ['browser_read'] }, { agent: agentA })
+  check('会话装载：A 重复装载报 already（记账按会话，不是按进程）',
+    stable(againA.value.already) === stable(['browser_read']) && againA.value.activated.length === 0, stable(againA.value))
+
+  const catalogA = await call(loaderHere, {}, { agent: agentA })
+  check('会话装载：A 的目录里不再列 browser_read，B 的装载也没污染 A',
+    !catalogA.value.available.some(row => row.name === 'browser_read')
+    && stable(catalogA.value.exposed) === stable(['browser_read']), stable(catalogA.value.exposed))
+
+  const globalLoad = await call(loaderHere, { names: ['browser_press'] }, {})
+  check('没有 agent 时退回全局层：注册进插件自己的服务面', box.tools.has('browser_press'))
+  check('没有 agent 时 scope 读回 global（不假装会话级）', globalLoad.value.scope === 'global', globalLoad.value.scope)
+  check('全局层装载后全局视角立刻读得到（scope 判定有据可依）', box.tools.get('browser_press') !== undefined)
+
+  const notAnAgent = await call(loaderHere, { names: ['browser_click'] }, { agent: 'nope' })
+  check('exec.agent 不是对象时按「没有会话」处理，不抛',
+    box.tools.has('browser_click') && notAnAgent.value.scope === 'global', stable(notAnAgent.value))
+
+  const hostile = {
+    id: 'session-H',
+    tools: new Map(),
+    ctx: {
+      tools: {
+        register: (def) => {
+          if (def.name === 'browser_press') throw new Error('gate closed')
+          hostile.tools.set(def.name, def)
+          return () => {}
+        },
+        get: () => undefined,
+      },
+    },
+  }
+  const refused = await call(loaderHere, { names: ['browser_press', 'browser_read'] }, { agent: hostile })
+  check('会话装载：注册抛错进 errors，并点名是哪一件',
+    Array.isArray(refused.value.errors) && refused.value.errors.length === 1
+    && refused.value.errors[0] === 'browser_press: gate closed', stable(refused.value.errors))
+  check('会话装载：一条失败不阻塞同批其余', stable(refused.value.activated) === stable(['browser_read']),
+    stable(refused.value.activated))
+  check('会话装载：render 把失败念出来，不报成装上了', /Failed to load: browser_press/.test(refused.text), refused.text)
+  check('会话装载：失败的没被算进装载集合', !hostile.tools.has('browser_press'), [...hostile.tools.keys()].join(','))
+
+  teardown(box)
+  check('插件卸载时把会话级注册一并摘掉（disposer 留在自己的 effect 里）',
+    !agentA.tools.has('browser_read') && !agentB.tools.has('browser_read') && !box.tools.has('browser_press'),
+    `${[...agentA.tools.keys()].join(',')} | ${[...box.tools.keys()].join(',')}`)
 }
 
 console.log(fails === 0 ? '\n工具懒启动全部符合契约' : `\n${fails} 项失败`)

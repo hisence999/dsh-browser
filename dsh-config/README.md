@@ -28,7 +28,7 @@
 | `config.token` | `dsh-local` | 扩展与桥接的握手令牌；多用户环境建议改掉 |
 | `config.readOnly` | `false` | 只读档：开启后拒绝一切会改变页面或浏览器状态的命令（点击/输入/按键/导航/滚动/标签页操作/视口模拟/弹窗策略/清缓冲），只留读页面与读日志。见下「两个闸门」 |
 | `config.allowScript` | `true` | 是否允许 `browser_evaluate` 在页面里执行任意脚本。关掉它仍然可以点击和读页面 —— 单开只读档**不等于**拿掉了任意脚本能力（eval 能做其它工具能做的所有事）。它同时约束 `browser_cdp`：原生 CDP 能走到 `Runtime.evaluate`，只关 eval 等于没关 |
-| `config.lazyToolDocs` | `false` | 工具懒启动：默认全开（23 个工具全部注册给模型）；打开后只为模型保留一个 `browser_tools` 装载器，由它按需把工具装进来（给工具名、分组名或 `"*"`）。装上的工具拿到的就是它**完整的描述与完整参数 schema**，与全开时逐字节相同——省的是每轮固定的工具块体积，不是安全边界 |
+| `config.lazyToolDocs` | `false` | 工具懒启动：默认全开（23 个工具全部注册给模型）；打开后只为模型保留一个 `browser_tools` 装载器，由它按需把工具装进来（给工具名、分组名或 `"*"`）。装上的工具拿到的就是它**完整的描述与完整参数 schema**，与全开时逐字节相同；装载按**会话**隔离（注册落进发起装载那个 agent 的 scope，别的会话看不见，会话结束回收）——省的是每轮固定的工具块体积，不是安全边界 |
 | `config.allowRawCdp` | `true` | 是否注册 `browser_cdp`（原生 CDP `Domain.method` 透传）。默认开；关掉后该工具不出现在模型工具面里。仍然受 `readOnly` / `allowScript` 约束 |
 | `config.tabWindow` | `current` | 第 4 项（v1.1.2+）：`browser_tabs open` 的落点。`current` = 用户当前窗口里开一个 `DSH` 分组标签（Chrome 原生语义）；`new` = `windows.create({focused: false})` 新开一个自己的窗口，**不抢焦点** |
 | `config.focusPolicy` | `avoid` | 第 4 项：`avoid` **绝不** `windows.update({focused:true})`（CDP 输入不需要 OS 焦点，不抬窗口也能点能打）；`auto` 是 v1.1.1 及以前的行为。两种都在最小化窗口上报 `window_minimized` |
@@ -42,7 +42,7 @@
 dsh 0.1.7+ / 0.2.x 的「设置」里会多出一页**浏览器控制**（插件自带的 Client 半边注册在 `settings.section`，不是宿主按 schema 投影的卡片）：
 
 - 看链路状态（端口、扩展版本、协议、待处理命令、最近错误、Token 掩码）与四个闸门的当前值；
-- 四个开关（`readOnly` / `allowScript` / `lazyToolDocs` / `allowRawCdp`）直接写入 profile 覆盖层，宿主随后重新加载插件；`lazyToolDocs` 与 `allowRawCdp` 改的是**工具面**，所以生效点在下一个会话/请求（装载器与已装载的工具会跟着重算）；
+- 四个开关（`readOnly` / `allowScript` / `lazyToolDocs` / `allowRawCdp`）直接写入 profile 覆盖层，宿主随后重新加载插件；`lazyToolDocs` 与 `allowRawCdp` 改的是**工具面**，所以生效点在下一个会话/请求（装载器与已装载的工具会跟着重算）。懒启动下的装载本身是按会话的：每个会话各自装载，注册落进该会话的 scope，会话结束时回收；
 - 「默认目标与接管」卡片里三个受控下拉（`tabWindow` / `focusPolicy` / `userTakeover`，v1.1.2+），写入路径同上；
 - 「闸门」卡片里另有 `allowIncognito` 开关（v1.1.3+），链路状态里还有一行「无痕权限」读的是扩展握手的真实值；
 - 「权限与行为」卡片里另有 `agentHighlight` 开关（v1.1.4+，默认开）；「标签与接管」卡片里多一个**分组名**文本框（`tabGroupTitle`，v1.1.4+，失焦或回车才提交一次，留空 = 不分组）；
