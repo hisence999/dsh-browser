@@ -14,11 +14,13 @@
 //   - 整页截图（`captureBeyondViewport`）会重置触摸仿真（Chromium 558509412），
 //     CDP 会话重建会把仿真整体复位（`EmulationHandler::Disable()`）——两处都要补回来。
 //
-// 这台验台钉住这四件事：
-//   §1 最小化：立刻失败、理由可执行、**一次 CDP 出图调用都不发**
+// 这台验台钉住这六件事：
+//   §1 最小化：截图立刻失败、理由可执行、**一次 CDP 出图调用都不发**；PDF 不受这条限制（真机实测最小化也能出）
 //   §2 挂着不返回：自带预算（验台压到 60ms 级），绝不跟着挂到桥的 60s 天花板
 //   §3 reset：任何一步失败 → `reset:false` + 失败步骤；全成功才是 `reset:true`
 //   §4 触摸：请求值与页面现场分开报；一次文档加载后才可见；会话重建 / 整页截图之后补回来
+//   §5 restoreWindow：显式要求才动窗口（恢复→拍→放回最小化），恢复本身不抢焦点；窗口正常时零改动
+//   §6 恢复了仍不产帧（被遮挡）：升级成抬前台再拍一次，之后仍然放回最小化
 //
 // 用法：node verify/verify_capture_touch.mjs
 import { runInContext } from "node:vm";
@@ -75,9 +77,13 @@ const lastTouchParams = (model) => {
   check("§1 一次 Page.captureScreenshot 都没有发出去", sends(model, "Page.captureScreenshot") === before,
     `${sends(model, "Page.captureScreenshot") - before} 次`);
 
-  const pdfErr = await errOf(ctx.runCommand("pdf", { tabId }));
-  check("§1 导出 PDF 同样先判窗口状态", pdfErr !== null && pdfErr.includes("最小化"), String(pdfErr)?.slice(0, 80));
-  check("§1 一次 Page.printToPDF 都没有发出去", sends(model, "Page.printToPDF") === 0,
+  // PDF 走的是打印排版，**不需要**被 present 的合成器帧：真机（Edge 156 / Windows，2026-10-31）
+  // 在最小化窗口上连测两次都返回真实 PDF（77k 字符、标题正确）。所以最小化不再拦 PDF ——
+  // 之前跟截图共用同一个守卫，等于把一条本来能用的路自己堵了。
+  model.dbg.results["Page.printToPDF"] = { data: "JVBERi0xLjQK" };
+  const pdfRes = await errOf(ctx.runCommand("pdf", { tabId }));
+  check("§1 最小化窗口也能导出 PDF（打印排版不需要帧）", pdfRes === null, String(pdfRes)?.slice(0, 90));
+  check("§1 PDF 确实发出去了 Page.printToPDF", sends(model, "Page.printToPDF") === 1,
     `${sends(model, "Page.printToPDF")} 次`);
 }
 
@@ -209,6 +215,69 @@ const lastTouchParams = (model) => {
     : null);
   await errOf(ctx.runCommand("content", { tabId }));
   check("§4d 复位过之后附着时不再把触摸塞回去", model.page.touchRequested === false, short(model.page));
+}
+
+// ---- §5) restoreWindow：显式要求才动窗口，恢复→拍→放回最小化 ----
+{
+  const { model, ctx, tabId } = await stage({ minimized: true });
+  // 抓「拍照那一刻窗口是什么状态」：只凭 windows.update 的记录看不出先后顺序。
+  let stateAtCapture = null;
+  model.dbg.results["Page.captureScreenshot"] = () => {
+    stateAtCapture = model.windows.get(1)?.state;
+    return { data: "iVBORw0KGgo=" };
+  };
+  const before = model.windowUpdates.length;
+  const res = await ctx.runCommand("screenshot", { tabId, restoreWindow: true });
+  const updates = model.windowUpdates.slice(before);
+  check("§5 显式 restoreWindow 时不再拒绝，拿得到图", typeof res?.base64 === "string", short(res));
+  check("§5 先把窗口从最小化恢复（state:'normal'）",
+    updates.some(([, props]) => props.state === "normal"), JSON.stringify(updates));
+  check("§5 拍照那一刻窗口已经不是最小化", stateAtCapture !== "minimized", String(stateAtCapture));
+  check("§5 拍完把窗口放回最小化",
+    updates.some(([, props]) => props.state === "minimized"), JSON.stringify(updates));
+  check("§5 窗口最终状态回到 minimized", model.windows.get(1).state === "minimized",
+    String(model.windows.get(1).state));
+  check("§5 恢复本身不抢焦点（没有 focused:true）",
+    updates.every(([, props]) => props.focused !== true), JSON.stringify(updates));
+  check("§5 结果里如实标了 restored:true", res?.restored === true, short(res));
+  check("§5 没有走抬前台的升级路径（raised 缺省）", res?.raised === undefined, short(res));
+}
+
+{
+  // 窗口正常时带 restoreWindow 也**不许**动窗口：参数只解决"最小化"，不该变成"多动几次窗口"。
+  const { model, ctx, tabId } = await stage();
+  model.dbg.results["Page.captureScreenshot"] = { data: "iVBORw0KGgo=" };
+  const before = model.windowUpdates.length;
+  const res = await ctx.runCommand("screenshot", { tabId, restoreWindow: true });
+  check("§5 窗口正常时 restoreWindow 完全不碰窗口", model.windowUpdates.length === before,
+    JSON.stringify(model.windowUpdates.slice(before)));
+  check("§5 窗口正常时不标 restored", res?.restored === undefined, short(res));
+  check("§5 窗口正常时照常出图", typeof res?.base64 === "string", short(res));
+}
+
+// ---- §6) 恢复了却仍然不产帧（被完全遮挡）：抬到前台再拍一次，且仍然放回最小化 ----
+{
+  const { model, ctx, tabId } = await stage({ minimized: true });
+  runInContext("CAPTURE_RESTORED_BUDGET_MS = 60", ctx);
+  let attempts = 0;
+  model.dbg.results["Page.captureScreenshot"] = () => {
+    attempts += 1;
+    return attempts === 1 ? new Promise(() => {}) : { data: "iVBORw0KGgo=" };
+  };
+  const before = model.windowUpdates.length;
+  const res = await orHung(ctx.runCommand("screenshot", { tabId, restoreWindow: true }), 4000);
+  const updates = model.windowUpdates.slice(before);
+  check("§6 首拍挂在预算上之后升级重拍，最终成功", res !== HUNG && typeof res?.base64 === "string", short(res));
+  check("§6 升级时把窗口抬到前台（focused:true 出现且只出现一次）",
+    updates.filter(([, props]) => props.focused === true).length === 1, JSON.stringify(updates));
+  check("§6 抬前台发生在第一次超时之后（先 normal，再 focused）",
+    updates.findIndex(([, props]) => props.state === "normal") >= 0
+    && updates.findIndex(([, props]) => props.focused === true) > updates.findIndex(([, props]) => props.state === "normal"),
+    JSON.stringify(updates));
+  check("§6 结果里标了 raised:true", res?.raised === true, short(res));
+  check("§6 即使走了升级路径，窗口仍然被放回最小化",
+    updates.some(([, props]) => props.state === "minimized") && model.windows.get(1).state === "minimized",
+    String(model.windows.get(1).state));
 }
 
 console.log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);

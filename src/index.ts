@@ -591,6 +591,10 @@ interface ScreenshotPayload {
 	base64: string
 	tabTitle?: string
 	tabUrl?: string
+	/** 这次调用临时把窗口从最小化恢复过（拍完已放回最小化）。 */
+	restored?: boolean
+	/** 恢复之后仍然拿不到帧，于是把窗口抬到了前台（被完全遮挡时才会发生）。 */
+	raised?: boolean
 }
 
 interface ScreenshotResult {
@@ -599,6 +603,8 @@ interface ScreenshotResult {
 	tabId: number
 	title?: string
 	url?: string
+	restored?: boolean
+	raised?: boolean
 }
 
 /** Write one screenshot payload to the shots directory and return its durable location. */
@@ -617,6 +623,8 @@ async function saveScreenshot(controller: BridgeController, payload: ScreenshotP
 		tabId: payload.tabId,
 		title: payload.tabTitle,
 		url: payload.tabUrl,
+		...(payload.restored === true ? { restored: true } : {}),
+		...(payload.raised === true ? { raised: true } : {}),
 	}
 }
 
@@ -1381,11 +1389,12 @@ function applyBrowserTools(ctx: Context, controller: BridgeController, options: 
 
 	mount(defineTool({
 		name: 'browser_screenshot',
-		description: 'Capture the tab as PNG/JPEG, save it under the configured shots directory, and return the absolute file path. Fails fast with the reason when the tab\'s window is minimized: Chromium renders no frames there, so the CDP capture would never return (restore the window, or capture a tab in a visible window).',
+		description: 'Capture the tab as PNG/JPEG, save it under the configured shots directory, and return the absolute file path. Fails fast with the reason when the tab\'s window is minimized: Chromium renders no frames there, so the CDP capture would never return. Pass `restoreWindow: true` to let the extension restore that window for the shot and put it back to minimized afterwards — it does not take focus, unless the window turns out to be fully covered (then it is raised once). Prefer a tab in a visible window when you can: a minimized window means the user is not looking at it.',
 		parameters: {
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			fullPage: { type: 'boolean', description: 'Capture beyond the viewport.' },
 			format: { type: 'string', description: '"png" (default) or "jpeg".' },
+			restoreWindow: { type: 'boolean', description: 'When the tab\'s window is minimized: restore it just for the capture and minimize it again afterwards. Defaults to false (the call fails fast instead of touching the user\'s window).' },
 		},
 		output: {
 			schema: {
@@ -1397,9 +1406,16 @@ function applyBrowserTools(ctx: Context, controller: BridgeController, options: 
 					tabId: { type: 'number', required: true },
 					title: { type: 'string' },
 					url: { type: 'string' },
+					restored: { type: 'boolean' },
+					raised: { type: 'boolean' },
 				},
 			},
-			render: (_args, value) => [{ type: 'text', text: `Saved ${value.file} (${value.bytes} bytes)` }],
+			render: (_args, value) => {
+				const note = value.raised === true
+					? ' (window was minimized: restored and raised to the front for the shot, then minimized again)'
+					: value.restored === true ? ' (window was minimized: restored for the shot, then minimized again)' : ''
+				return [{ type: 'text', text: `Saved ${value.file} (${value.bytes} bytes)${note}` }]
+			},
 		},
 		presentCall: () => ({ card: 'generic', title: 'Browser screenshot', kind: 'other' as const }),
 		async execute(args, exec) {
@@ -1407,6 +1423,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController, options: 
 			const params: Record<string, unknown> = { format }
 			if (args.tabId !== undefined) params.tabId = args.tabId
 			if (args.fullPage !== undefined) params.fullPage = args.fullPage
+			if (args.restoreWindow !== undefined) params.restoreWindow = args.restoreWindow
 			const payload = await controller.execute('screenshot', params, exec.signal) as ScreenshotPayload
 			return saveScreenshot(controller, payload)
 		},

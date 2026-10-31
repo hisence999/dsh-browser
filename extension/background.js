@@ -2507,6 +2507,15 @@ async function cmdCdpCall(params) {
 let CAPTURE_BUDGET_MS = 15000
 
 /**
+ * 恢复窗口之后的**首拍**预算：比 {@link CAPTURE_BUDGET_MS} 短得多。
+ *
+ * 恢复后正常是一帧之内就回来（实测立刻成功）；如果几千毫秒都没回，基本可以断定不是"还在等
+ * 首帧"，而是窗口虽然恢复了却被完全遮挡。那时候才有必要升级成"抬到前台再拍一次"，
+ * 而升级之前不该白等 15 秒。
+ */
+let CAPTURE_RESTORED_BUDGET_MS = 5000
+
+/**
  * 等 `promise` 最多 `ms`；超时以 `code: 'capture_timeout'` 拒绝。
  *
  * 注意这里**不重放**：出图是只读的，重放没有意义；而 `withCDP` 的自动重连只认
@@ -2546,11 +2555,69 @@ function withCaptureBudget(promise, ms, what) {
 async function assertFrameableWindow(tab, what) {
 	const win = await chrome.windows.get(tab.windowId).catch(() => null)
 	if (win === null || win.state !== 'minimized') return
-	throw new Error(
+	const err = new Error(
 		`${what} 需要一个真的会产帧的窗口：标签页 ${tab.id} 所在的窗口现在是「最小化」。`
 		+ 'CDP 在这种窗口上不会报错，只会一直不返回（实测会吃满 60 秒），重试多少次都一样。'
-		+ '先把那个浏览器窗口恢复（或改用另一个可见窗口里的标签页）。',
+		+ '两条路：把那个浏览器窗口恢复（或改用另一个可见窗口里的标签页）；'
+		+ '或者这次调用就带上 restoreWindow:true，让扩展先把窗口恢复（不抢焦点）、拍完再放回最小化。',
 	)
+	// 有 code 才能让插件那边给出对得上的下一步；光靠文本会落进「通常是选择器没命中」。
+	err.code = 'window_minimized'
+	throw err
+}
+
+/**
+ * 恢复窗口只是为了拍一张图，拍完把窗口放回最小化。
+ *
+ * 实测（Edge 156 / Windows，2026-10-31，隔离无痕窗口）：只把窗口从最小化恢复、**不抢焦点**
+ * 就足以产帧——恢复完立刻 `Page.captureScreenshot` 成功（OS 层等价的恢复调用 24~42ms）。
+ * 所以这里默认**不** `focused:true`；只有当窗口恢复了却还是拿不到帧（典型：被另一个窗口
+ * 完全遮挡）才升级一次，把窗口抬到前台。
+ *
+ * 为什么必须由调用方显式要求：窗口会闪现几百毫秒，这是打扰；`focusPolicy: avoid` 的设计意图
+ * 就是「AI 不碰用户的桌面」，替用户决定把窗口拉到脸上不在我们职权内。
+ *
+ * @param tab - 目标标签页。
+ * @param action - 真正的出图动作；`flags.restored/raised` 说明这次动过窗口，`flags.budgetMs` 是首拍预算。
+ * @returns `{ payload, restored, raised }`。
+ */
+async function withRestoredWindow(tab, action) {
+	const win = await chrome.windows.get(tab.windowId).catch(() => null)
+	if (win === null || win.state !== 'minimized') {
+		return { payload: await action({ restored: false, raised: false, budgetMs: CAPTURE_BUDGET_MS }), restored: false, raised: false }
+	}
+	await chrome.windows.update(win.id, { state: 'normal' })
+	// `state` 是异步落地的：读到它真的不再是 minimized 再拍（最多等 1 秒）。
+	for (let i = 0; i < 40; i += 1) {
+		const now = await chrome.windows.get(win.id).catch(() => null)
+		if (now !== null && now.state !== 'minimized') break
+		await new Promise((resolve) => setTimeout(resolve, 25))
+	}
+	let raised = false
+	try {
+		try {
+			// 首拍用**短**预算：恢复以后正常是一帧之内就回来，长时间不回来说明另有原因（遮挡）。
+			return {
+				payload: await action({ restored: true, raised, budgetMs: CAPTURE_RESTORED_BUDGET_MS }),
+				restored: true,
+				raised: false,
+			}
+		} catch (error) {
+			if (error?.code !== 'capture_timeout') throw error
+			raised = true
+			// 恢复了仍然不产帧：抬到前台再试一次（这一次是调用方要求 restoreWindow 的合理延伸）。
+			await chrome.windows.update(win.id, { focused: true }).catch(() => {})
+			await new Promise((resolve) => setTimeout(resolve, 120))
+			return {
+				payload: await action({ restored: true, raised, budgetMs: CAPTURE_BUDGET_MS }),
+				restored: true,
+				raised: true,
+			}
+		}
+	} finally {
+		// 无论成败都放回去：用户的桌面不该因为一次截图留下一个弹出来的窗口。
+		await chrome.windows.update(win.id, { state: 'minimized' }).catch(() => {})
+	}
 }
 
 /**
@@ -2562,7 +2629,10 @@ async function assertFrameableWindow(tab, what) {
  */
 async function cmdPdf(params) {
 	const tab = await resolveTab(params.tabId, policyOf(params).jar);
-	await assertFrameableWindow(tab, '导出 PDF');
+	// 这里**不**做最小化预判：实测（Edge 156 / Windows，2026-10-31）`Page.printToPDF` 在最小化
+	// 窗口上照样返回真实 PDF（连测两次，77k 字符、标题正确）——它走的是打印排版，不需要被
+	// present 的合成器帧。之前跟截图共用同一个守卫，等于把一条本来能用的路自己堵了。
+	// 仍然保留自带的预算：其它不产帧的形态（例如页面卡住）不该无限等。
 	// 打印也得躲开我们自己的高亮层：`position: fixed` 的描边与徽标会在**每一页**重复出现。
 	const shouldHide = await highlightOnTab(tab.id);
 	return withCDP(tab.id, async (send) => {
@@ -3680,21 +3750,23 @@ async function highlightOnTab(tabId) {
 }
 
 /** 截图：藏、拍（带自己的预算）、还原。`options` 原样透传给 `Page.captureScreenshot`。 */
-function captureWithoutHighlight(send, options, shouldHide) {
+function captureWithoutHighlight(send, options, shouldHide, budgetMs = CAPTURE_BUDGET_MS) {
 	// 预算只罩住**拍照本身**：`withHighlightHidden` 的 finally 必须还能跑，
 	// 否则一次超时就会把页面上那圈框永久藏起来（display:none 没人再还原）。
 	return withHighlightHidden(send, shouldHide, () =>
-		withCaptureBudget(send('Page.captureScreenshot', options), CAPTURE_BUDGET_MS, '截图（Page.captureScreenshot）'))
+		withCaptureBudget(send('Page.captureScreenshot', options), budgetMs, '截图（Page.captureScreenshot）'))
 }
 
 async function cmdScreenshot(params) {
 	const tab = await resolveTab(params.tabId, policyOf(params).jar);
 	const format = params.format === 'jpeg' ? 'jpeg' : 'png';
-	// 最小化的窗口上截图会一直挂着（见 assertFrameableWindow）：能当场说清就别等预算。
-	await assertFrameableWindow(tab, '截图');
+	const restore = params.restoreWindow === true;
+	// 最小化窗口上没有合成器帧：默认当场说清、零 CDP 零窗口改动；
+	// 只有调用方显式要 `restoreWindow` 才动窗口（恢复 → 拍 → 放回最小化）。
+	if (!restore) await assertFrameableWindow(tab, '截图');
 	// 只在这一页真的挂着我们的框时才去藏：否则每条截图都白搭一次 CDP 往返。
 	const shouldHide = await highlightOnTab(tab.id);
-	const res = await withCDP(tab.id, async (send) => {
+	const shoot = (flags) => withCDP(tab.id, async (send) => {
 		// Element capture: resolve the selector to a CSS-pixel rect, then pass
 		// it as clip. Page.captureScreenshot's clip is in CSS pixels and it
 		// handles DPR internally (unlike raw base64 math).
@@ -3717,24 +3789,27 @@ async function cmdScreenshot(params) {
 				format,
 				quality: format === 'jpeg' ? Math.min(100, Math.max(1, Number(params.quality) || 80)) : undefined,
 				clip: { ...rect, scale: 1 },
-			}, shouldHide).then((shot) => ({ shot, elementRect: rect }));
+			}, shouldHide, flags.budgetMs).then((shot) => ({ shot, elementRect: rect }));
 		}
 		const shot = await captureWithoutHighlight(send, {
 			format,
 			quality: format === 'jpeg' ? Math.min(100, Math.max(1, Number(params.quality) || 80)) : undefined,
 			captureBeyondViewport: Boolean(params.fullPage),
-		}, shouldHide);
+		}, shouldHide, flags.budgetMs);
 		// 整页截图会把触摸仿真重置（Chromium issue 558509412；Playwright 为此每次补发）：
 		// 不补的话，页面会静默退回桌面形态，而工具还在说 touch 是开的。
 		if (params.fullPage === true) await replayEmulation(tab.id).catch(() => {});
 		return { shot };
 	});
+	const { payload: res, restored, raised } = await withRestoredWindow(tab, shoot);
 	return {
 		tabId: tab.id,
 		format,
 		base64: res.shot.data,
 		tabTitle: tab.title,
 		tabUrl: tab.url,
+		...(restored ? { restored: true } : {}),
+		...(raised ? { raised: true } : {}),
 		...(res.elementRect ? {
 			elementRect: {
 				x: Math.round(res.elementRect.x), y: Math.round(res.elementRect.y),

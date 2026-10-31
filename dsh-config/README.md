@@ -31,7 +31,7 @@
 | `config.lazyToolDocs` | `false` | 工具懒启动：默认全开（23 个工具全部注册给模型）；打开后只为模型保留一个 `browser_tools` 装载器，由它按需把工具装进来（给工具名、分组名或 `"*"`）。装上的工具拿到的就是它**完整的描述与完整参数 schema**，与全开时逐字节相同；装载按**会话**隔离（注册落进发起装载那个 agent 的 scope，别的会话看不见，会话结束回收）——省的是每轮固定的工具块体积，不是安全边界 |
 | `config.allowRawCdp` | `true` | 是否注册 `browser_cdp`（原生 CDP `Domain.method` 透传）。默认开；关掉后该工具不出现在模型工具面里。仍然受 `readOnly` / `allowScript` 约束 |
 | `config.tabWindow` | `current` | 第 4 项（v1.1.2+）：`browser_tabs open` 的落点。`current` = 用户当前窗口里开一个 `DSH` 分组标签（Chrome 原生语义）；`new` = `windows.create({focused: false})` 新开一个自己的窗口，**不抢焦点** |
-| `config.focusPolicy` | `avoid` | 第 4 项：`avoid` **绝不** `windows.update({focused:true})`（CDP 输入不需要 OS 焦点，不抬窗口也能点能打）；`auto` 是 v1.1.1 及以前的行为。两种都在最小化窗口上报 `window_minimized` |
+| `config.focusPolicy` | `avoid` | 第 4 项：`avoid` **绝不** `windows.update({focused:true})`（CDP 输入不需要 OS 焦点，不抬窗口也能点能打）；`auto` 是 v1.1.1 及以前的行为。两种都在最小化窗口上报 `window_minimized`。截图另有显式例外：调用时传 `restoreWindow:true` 才临时恢复窗口（不抢焦点）、拍完放回最小化；PDF 不需要帧，最小化也能出 |
 | `config.userTakeover` | `yield` | 第 4 项：用户在 AI 的标签页上**真的动手**（v1.1.5 起只认 `isTrusted` 的点击/输入/按键/粘贴；切标签页、切窗口、打开扩展弹窗、滚动都不算）时，AI 在那页上的写操作被拒（`yielded_to_user`、零副作用）；四条解除路径：用户在别的标签页动手 / 用户切到自己的标签页 / 所有窗口失焦 / `tabs.activate` 显式要回来。`ignore` 关掉这条 |
 | `config.allowIncognito` | `false` | 第 3 项（v1.1.3+）：允许开**隔离实例**（无痕窗口，独立 cookie 罐、退出即清）。默认关——它会在用户屏幕上开一个窗口，还能绕开用户真实会话，所以要显式打开；而且**还需要**在浏览器扩展管理页允许本扩展在无痕/InPrivate 中运行（浏览器那层的权限，插件翻不动）。`profile.close` 与 `profile.status` 不受它约束 |
 | `config.tabGroupTitle` | `DSH` | 第 1 项（v1.1.4+）：AI 新建标签组时用的名字。扩展按 **Chrome 的 `groupId`** 认自己的组（记在 session 里），不是按标题——**同名不会合并**，也不会动用户自己的同名组（他那组里的标签页照旧不算 AI 的，`tabs.close` 要 `force`、`tabs.ungroup` 不拆它）。改名字 = 之后新建的组用新名字，已经建好的老组按 id 仍是 AI 的。**空串 = 不分组**，所以不能用 `\|\|` 兜底；压平空白、最长 40 字符。`browser_tabs` 的 `groupTitle` 参数可按次覆盖 |

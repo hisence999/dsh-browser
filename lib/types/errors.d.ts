@@ -15,7 +15,7 @@
  * 重试安全。
  */
 /** 失败原因分类。 */
-export type BridgeErrorCode = 'bridge_disabled' | 'extension_offline' | 'command_timeout' | 'link_lost' | 'cancelled' | 'not_configured' | 'blocked_by_policy' | 'locked_by_user' | 'lock_unreadable' | 'held_by_user' | 'yielded_to_user' | 'incognito_unavailable' | 'command_failed';
+export type BridgeErrorCode = 'bridge_disabled' | 'extension_offline' | 'command_timeout' | 'link_lost' | 'cancelled' | 'not_configured' | 'blocked_by_policy' | 'locked_by_user' | 'lock_unreadable' | 'held_by_user' | 'yielded_to_user' | 'incognito_unavailable' | 'window_minimized' | 'capture_timeout' | 'command_failed';
 /**
  * 扩展侧拒绝命令时写在 error 文本最前面的两个标记。
  *

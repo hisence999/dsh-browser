@@ -37,6 +37,12 @@ const cases = [
   // 无痕权限缺失：`profile.launch` 是写操作（可能多一个窗口），但这一条**一个窗口都没建**，
   // 所以必须报 not_started。归成 command_failed 的话模型会以为「可能开了一半」而去查窗口。
   ["profile.launch", "browser-incognito-unavailable: 扩展还没有无痕/InPrivate 访问权限", "incognito_unavailable", "not_started"],
+  // 最小化的窗口：扩展在发 CDP 之前就按窗口状态拒绝，零副作用 → not_started。
+  // 归成 command_failed 的话模型收到的是「通常是选择器没命中」这种完全跑偏的下一步
+  //（用户 2026-10-31 报「最小化时截图失败率很高」，根因之一就是这条 hint 指错方向）。
+  ["screenshot", "截图 需要一个真的会产帧的窗口：标签页 7 所在的窗口现在是「最小化」。CDP 在这种窗口上不会报错，只会一直不返回（实测会吃满 60 秒），重试多少次都一样。两条路：把那个浏览器窗口恢复（或改用另一个可见窗口里的标签页）；或者这次调用就带上 restoreWindow:true。", "window_minimized", "not_started"],
+  // 预算到点放弃：出图调用根本没回来，页面零副作用，重试安全。
+  ["screenshot", "截图（Page.captureScreenshot） 在 60 毫秒内没有返回：窗口最小化或被完全遮挡时，CDP 的出图调用不产帧、也不报错，只会一直挂着。这次已经放弃。", "capture_timeout", "not_started"],
 ];
 for (const [cmd, msg, code, effect] of cases) {
   const e = classify(cmd, new Error(msg));
