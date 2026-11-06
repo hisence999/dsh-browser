@@ -78,6 +78,8 @@ Once installed, just talk in natural language — the agent picks the tools. A f
 
 **Settings page**: on dsh 0.1.7+ / 0.2.x, "Settings → 浏览器控制" (Browser Control) shows the link status, the switches (read-only, script execution, lazy tools, raw CDP, isolated instance, group name, AI highlight, tab placement, focus policy, user takeover) and a cleanup button for screenshots and scratch files.
 
+**`@` in the composer references your open tabs**: type `@` in the dsh composer and, besides the host's own files and sessions, a "浏览器标签页" (browser tabs) group appears — listing **only the ordinary-window pages you opened yourself**. Incognito tabs are never listed; tabs the AI opened are not listed either, and the test is "was this tab created by `tabs.open`", **not** "is it owned by the AI" — a page you drag into the AI's tab group still shows up, because those are often exactly the pages worth referencing. Picking one inserts plain text `浏览器标签页「<title>」 <url>`, so the model reads the URL directly; clicking that reference in a sent message brings the tab to the front (not under `readOnly` — visible does not mean reachable). Listing is cached for two seconds, so a tab you just opened appears within that window.
+
 **What the AI's tabs look like**: tabs it opens are collected into a blue tab group (name `DSH` by default and configurable; empty = no group; a single call may override it with `groupTitle`). Ownership is tracked by **group id**, never by name — a group of yours with the same name is never taken over. It only closes tabs it opened; closing yours requires an explicit `force`.
 
 **You touch it, it stops**: when you actually click / type / paste on the page it is driving, its write operations there (including closing that tab) are refused with `yielded_to_user` and zero side effects. **Merely switching to it or scrolling does not count as taking over.**
@@ -132,6 +134,7 @@ Chrome browser
 | `browser_dialog` | Read/change the native dialog policy (`accept`/`dismiss`/`manual`) and return recent records |
 | `browser_hold` | Add/remove a cancellable takeover overlay (tells the user, prevents misclicks); a soft layer, not a security boundary |
 | `browser_tabs` | Tab management: list / open / close / activate / group / ungroup |
+| `browser_launch` | Start the browser itself and wait for the extension to connect (for when it is closed) |
 | `browser_evaluate` | Run arbitrary JS; optional `timeoutMs` budget (100–120000) |
 | `browser_screenshot` | Screenshot (PNG/JPEG, saved to disk, path returned) |
 | `browser_pdf` | Export the current page to PDF |
@@ -145,7 +148,7 @@ Chrome browser
 | `browser_cleanup` | Delete screenshots and scratch files |
 | `browser_tools` | Loader: appears only in lazy mode; give it tool names, a group name, or `"*"` to load them |
 
-23 tools in total. Fully open by default: all 23 are registered for the model; turning on "lazy tools" leaves only `browser_tools` exposed, and it loads the rest on demand (each loaded definition is byte-identical to the eager one). A load applies to the session that asked for it: other sessions still see only the loader, and the loaded tools go away when that session ends. `verify/verify_surface.mjs` reconciles this surface against the extension's command table; drift makes `npm run verify` fail.
+24 tools in total. Fully open by default: all 24 are registered for the model; turning on "lazy tools" leaves only `browser_tools` exposed, and it loads the rest on demand (each loaded definition is byte-identical to the eager one). A load applies to the session that asked for it: other sessions still see only the loader, and the loaded tools go away when that session ends. `verify/verify_surface.mjs` reconciles this surface against the extension's command table; drift makes `npm run verify` fail.
 
 ## License
 

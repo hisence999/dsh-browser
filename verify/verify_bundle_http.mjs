@@ -3,6 +3,7 @@
 import net from "node:net";
 import { readFile } from "node:fs/promises";
 import { Config, apply } from "../lib/index.js";
+import { TOOL_GROUPS } from "../src/tool-help.ts";
 
 const PORT = 9777;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -42,8 +43,13 @@ const patch = await readFile(new URL("../cordis.patch.yml", import.meta.url), "u
 apply(ctx, Config({ enabled: /enabled:\s*true/.test(patch), port: PORT, token: "dsh-local" }));
 await new Promise((r) => setTimeout(r, 250));
 
-check("发布产物注册 23 个工具（全开模式：22 个工具 + browser_cdp）", tools.length === 23, String(tools.length));
-check("发布产物工具面含 browser_profile（第 23 个，供隔离实例用）", tools.includes("browser_profile"), tools.join(","));
+// 工具数量一律从分组表推导，不写死：硬编码的 23 每加一个工具就要改一遍，
+// 而「忘了改」的表现是这条断言红、看起来像发布产物坏了。
+const EXPECTED_TOOL_COUNT = Object.values(TOOL_GROUPS).flat().length;
+check(`发布产物注册 ${EXPECTED_TOOL_COUNT} 个工具（全开模式：分组表里的每一个）`,
+  tools.length === EXPECTED_TOOL_COUNT, `${tools.length} vs ${EXPECTED_TOOL_COUNT}`);
+check("发布产物工具面含 browser_profile（供隔离实例用）", tools.includes("browser_profile"), tools.join(","));
+check("发布产物工具面含 browser_launch（浏览器没开时拉起它）", tools.includes("browser_launch"), tools.join(","));
 check("全开模式的发布产物里没有懒启动装载器 browser_tools", !tools.includes("browser_tools"), tools.join(","));
 check("默认 token 触发启动告警", logs.some((l) => l.includes("insecure token")), logs.filter((l) => l.includes("insecure")).join("|").slice(0, 90));
 

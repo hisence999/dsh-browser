@@ -30,10 +30,13 @@ import { BridgeError, classify } from './errors.ts'
 import { policyRefusal } from './policy.ts'
 import { buildSettingsRoute, TAB_GROUP_TITLE_MAX } from './settings-routes.ts'
 import { TOOL_GROUPS, groupOf, summarize } from './tool-help.ts'
+import { resolveBrowser, spawnBrowser, waitForExtension, LAUNCH_CONNECT_TIMEOUT_MS } from './launch.ts'
+import type { LaunchOutcome } from './launch.ts'
 
 // Re-exported so the policy tables stay testable from the published bundle
 // (verify/verify_policy.mjs reconciles them against the extension's COMMANDS).
 export { LOCAL_DESTRUCTIVE_COMMANDS, PAGE_MUTATING_COMMANDS, READ_ONLY_ALLOWED, SCRIPT_COMMANDS, policyRefusal } from './policy.ts'
+export { LOCAL_SPAWN_COMMANDS } from './policy.ts'
 
 /**
  * Tool results are plain JSON. Declared locally rather than imported: dsh-tools
@@ -165,6 +168,15 @@ export interface Config {
 	 * now" is exactly the question a user watching their own browser asks.
 	 */
 	agentHighlight?: boolean
+	/**
+	 * 显式指定要启动的浏览器可执行文件路径（`browser_launch` 用）。
+	 *
+	 * 空串（默认）= 不指定，按「已知安装位置 → PATH 搜索 → 目录搜索兜底」自动找。
+	 * 只有当自动查找在你机器上找不到、或者你装了便携版/非默认路径的浏览器时才需要填。
+	 * **给了就只用它**：填错会如实报错，不会悄悄换成另一个浏览器——"我明明指定了"
+	 * 变成谎话比找不到更糟。
+	 */
+	browserPath?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -182,6 +194,7 @@ export const Config: z<Config> = z.object({
 	userTakeover: z.union(['yield', 'ignore']).default('yield'),
 	tabGroupTitle: z.string().default('DSH'),
 	agentHighlight: z.boolean().default(true),
+	browserPath: z.string().default(''),
 })
 
 interface ResolvedConfig {
@@ -199,6 +212,7 @@ interface ResolvedConfig {
 	userTakeover: 'yield' | 'ignore'
 	tabGroupTitle: string
 	agentHighlight: boolean
+	browserPath: string
 }
 
 const SNAPSHOT_REF_SELECTOR_PATTERN = /^e\d+$/
@@ -233,6 +247,23 @@ class BridgeController {
 	private current: ResolvedConfig | undefined
 
 	constructor(private readonly log: (line: string) => void) {}
+
+	/**
+	 * 扩展此刻连着没有。
+	 *
+	 * `browser_launch` 用它在 spawn 之前先判断「其实已经连上了，根本不用启动」，
+	 * 以及 spawn 之后轮询等它连上。读的是活服务器，不是缓存：桥被停掉时
+	 * `server` 就是 `undefined`，这时答案必然是 false。
+	 * @returns 已连接为 true。
+	 */
+	isExtensionConnected(): boolean {
+		return this.server?.status.extensionConnected === true
+	}
+
+	/** 配置里显式指定的浏览器路径；没配过是空串。 */
+	get browserPath(): string {
+		return this.current?.browserPath ?? ''
+	}
 
 	/** Resolved directory screenshots land in; defined once any config arrived. */
 	get shotsDir(): string | undefined {
@@ -451,6 +482,75 @@ class BridgeController {
 			// 删除是逐条进行的，中途失败时前面的文件已经没了；不包一层分类，
 			// 模型拿到的就是一句没有 code / effectState 的裸 fs 错误。
 			throw classify('cleanup', error)
+		}
+	}
+
+	/**
+	 * 启动浏览器并等扩展连上桥（`browser_launch`）。
+	 *
+	 * 这条路**不经过** `execute()`：浏览器没开的时候扩展不在运行，没有任何东西能
+	 * 执行扩展命令。所以它必须自己站一次策略闸门（见 {@link policyGate}），否则
+	 * 只读档下模型仍能在用户桌面上拉起一个窗口。
+	 *
+	 * 三种结果分开报，因为它们要人做的事完全不同：
+	 *   - 已经连着 → 什么都不做，直接说"已经连上了"（重复启动只会多开一个窗口）；
+	 *   - spawn 成功但没连上 → 浏览器起来了，扩展没握手（没装/被禁用/端口或 Token
+	 *     两边不一致），这要**人去查扩展**，不是重试；
+	 *   - 找不到浏览器 / spawn 失败 → 把试过的路径原样带回去。
+	 * @param options.force - 已经连着时仍然启动一个新的浏览器实例。
+	 * @param options.args - 额外命令行参数（例如 `--user-data-dir=…`）。
+	 * @param options.signal - 工具调用取消。
+	 * @param options.lockArgs - 覆盖锁文件参数（验台用；默认按平台给）。
+	 * @param options.timeoutMs - 等扩展连上的上限。
+	 * @returns 结构化的启动结果。
+	 */
+	async launch(options: {
+		force?: boolean
+		args?: readonly string[]
+		signal?: AbortSignal
+		timeoutMs?: number
+	} = {}): Promise<LaunchOutcome> {
+		// 闸门必须在这里自己站：这条路绕开了 execute()，而"在用户屏幕上拉起一个程序"
+		// 毫无疑问属于只读档要拦的改动。
+		this.policyGate('launch')
+		const timeoutMs = options.timeoutMs ?? LAUNCH_CONNECT_TIMEOUT_MS
+		// 已经连着就别再开一个窗口了：用户要的是"能用"，不是"多一个浏览器"。
+		if (options.force !== true && this.isExtensionConnected()) {
+			return { launched: false, connected: true, waitedMs: 0, browser: undefined, target: undefined }
+		}
+		const resolved = await resolveBrowser({ path: this.browserPath })
+		if (resolved.found === undefined) {
+			const attempted = resolved.attempted.slice(0, 20)
+			throw new BridgeError('launch', 'launch_not_found', 'not_started',
+				`没有找到可启动的浏览器：试过 ${resolved.attempted.length} 个位置（显式配置 ${resolved.stages.configured}、`
+				+ `已知安装位置 ${resolved.stages.knownPath}、PATH ${resolved.stages.path}、目录搜索 ${resolved.stages.search}）。`
+				+ `${attempted.length > 0 ? `试过的前几个：${attempted.join('；')}。` : ''}`
+				+ `三条路任选：在设置页「浏览器路径」里填可执行文件的完整路径、在 profile 的 browser-bridge 配置里写 browserPath、`
+				+ `或者由用户自己打开浏览器。不要重复调用本工具——同样的环境不会给出不同结果。`)
+		}
+		const extraArgs = [...(options.args ?? [])]
+		let pid: number | undefined
+		try {
+			const spawned = await spawnBrowser(resolved.found, extraArgs)
+			pid = spawned.pid
+		} catch (error) {
+			throw new BridgeError('launch', 'launch_failed', 'not_started',
+				`拉起浏览器失败（${resolved.found.target}）：${errorMessage(error)}。`
+				+ `进程没有被启动，没有任何副作用。请用户确认那个路径确实可执行；路径可用设置页「浏览器路径」修改。不要原地重试。`)
+		}
+		this.log(`browser-bridge: launched ${resolved.found.label} (${resolved.found.target}) pid=${pid ?? '?'}`)
+		const waited = await waitForExtension({
+			isConnected: () => this.isExtensionConnected(),
+			timeoutMs,
+			...(options.signal === undefined ? {} : { signal: options.signal }),
+		})
+		return {
+			launched: true,
+			browser: resolved.found.label,
+			target: resolved.found.target,
+			...(resolved.found.source === undefined ? {} : { foundVia: resolved.found.source }),
+			connected: waited.connected,
+			waitedMs: waited.waitedMs,
 		}
 	}
 
@@ -1210,6 +1310,63 @@ function applyBrowserTools(ctx: Context, controller: BridgeController, options: 
 			// 并抛错——连"不带参只读"也崩，因为信封总是盖。对外的工具参数名不变。
 			if (args.policy !== undefined) params.dialogPolicy = args.policy
 			return await controller.execute('dialog', params, exec.signal) as Record<string, JsonValue>
+		},
+	}))
+
+	mount(defineTool({
+		name: 'browser_launch',
+		description: 'Start the browser itself when it is not running, then wait for the DSH Browser extension to connect back. Use this when browser_info or any other tool reports "extension offline" and the user has confirmed the browser is closed — not when the browser is open with a broken extension (that needs the user to check the extension, and this tool will not fix it). If the extension is already connected this does nothing and says so. Finds the browser by: the configured `browserPath` setting first (used exclusively when set), then known install locations, then PATH, then a bounded directory search; if none work the error lists what was tried. Launches a detached process, so the browser outlives this agent session. Returns whether it got as far as the extension connecting: a launch that succeeds but never connects means the extension is missing, disabled, or pointed at a different port/token.',
+		parameters: {
+			force: { type: 'boolean', description: 'Start another browser instance even when the extension is already connected. Defaults to false because launching when it already works only adds a window the user did not ask for.' },
+			args: { type: 'array', items: { type: 'string' }, description: 'Extra command-line arguments passed to the browser, e.g. ["--user-data-dir=C:\\\\tmp\\\\profile"]. Omit for the user real profile (with its logins).' },
+			handshakeMs: { type: 'number', description: 'How long to wait for the extension to connect after launching, in ms (1000-60000; default 5000). Raise it on a slow cold start rather than calling again.' },
+		},
+		output: {
+			schema: {
+				type: 'object',
+				additionalProperties: false,
+				properties: {
+					launched: { type: 'boolean', required: true },
+					connected: { type: 'boolean', required: true },
+					waitedMs: { type: 'number', required: true },
+					browser: { type: 'string' },
+					target: { type: 'string' },
+					foundVia: { type: 'string' },
+				},
+			},
+			render: (_args, value) => {
+				if (value.launched !== true) {
+					// 只有「已经连着所以什么都没做」会走到这里：启动失败是抛错，不会返回。
+					return [{ type: 'text', text: `Browser extension is already connected — nothing launched. ${value.browser === undefined ? '' : `(${value.browser})`}`.trim() }]
+				}
+				const how = value.foundVia === undefined ? '' : ` (found via ${value.foundVia})`
+				const head = `Launched ${value.browser ?? 'browser'}${how}: ${value.target ?? '?'}`
+				return [{
+					type: 'text',
+					text: value.connected === true
+						? `${head}. The extension connected after ${value.waitedMs}ms — browser tools work now.`
+						: `${head}. The extension did NOT connect within ${value.waitedMs}ms. The browser is running, so the problem is on the extension side: it may not be installed in this browser, be disabled, or point at a different port/token. Ask the user to check the extension icon (green = connected) instead of launching again.`,
+				}]
+			},
+		},
+		presentCall: () => ({ card: 'generic', title: 'Launch browser', kind: 'other' as const }),
+		isConcurrencySafe: () => false,
+		async execute(args, exec) {
+			const options: { force?: boolean; args?: readonly string[]; signal?: AbortSignal; timeoutMs?: number } = { signal: exec.signal }
+			if (args.force === true) options.force = true
+			if (Array.isArray(args.args) && args.args.length > 0) options.args = args.args.map(String)
+			if (typeof args.handshakeMs === 'number') {
+				options.timeoutMs = Math.min(60_000, Math.max(1_000, Math.round(args.handshakeMs)))
+			}
+			const outcome = await controller.launch(options)
+			return {
+				launched: outcome.launched,
+				connected: outcome.connected,
+				waitedMs: outcome.waitedMs,
+				...(outcome.browser === undefined ? {} : { browser: outcome.browser }),
+				...(outcome.target === undefined ? {} : { target: outcome.target }),
+				...(outcome.foundVia === undefined ? {} : { foundVia: outcome.foundVia }),
+			}
 		},
 	}))
 
@@ -2156,21 +2313,73 @@ function mountSettingsRoute(
 		} catch {
 			origin = undefined
 		}
+		/**
+		 * 「这条请求没有信号时」用的兜底信号。
+		 *
+		 * 路由对每个请求各造一个 `AbortController` 并在响应关闭时 abort，所以正常情况下
+		 * 传来的 signal 是有的、也真的会响。但 `SettingsRouteDeps` 上这两个回调的信号是
+		 * **可选**的（验台会直接 `listTabs()` 不带参数调），而 `controller.execute` 要求
+		 * 必填。这里给一个插件生命周期内的常驻信号兜底；它在插件卸载时被 abort（见下面
+		 * `ctx.effect`），所以不会出现「永远不可取消」的命令。
+		 */
+		const fallbackSignal = new AbortController()
 		const route = buildSettingsRoute({
 			packageName: PACKAGE_NAME,
 			getConfig: () => current(),
 			status: () => controller.status(),
 			cleanup: () => controller.cleanup(),
 			getService: name => serviceNamed(ctx, name),
+			// `@` 菜单的两条数据路。都在这里接上 `controller.execute`，因此自动继承策略
+			// 闸门与策略信封：`tabs.list` 在只读档白名单里（本来就只读），`tabs.activate`
+			// 不在——只读档下点 chip 会拿到 blocked_by_policy，这正是我们要的，别在这里开洞。
+			//
+			// 请求信号**透传**下去，但它现在的语义比看上去窄：`createReferenceTabsCache`
+			// 传给 `fetchTabs` 的是它自己的 `ownAbort.signal`，所以这里收到的 signal
+			// **只决定这个调用者还要不要继续等**，不再打断那次共享的 `tabs.list`
+			// （否则一个调用者被取消会顺带把别人的结果带坏；完整时序见
+			// `settings-routes.ts` 里 `start` / `waitFor` 的注释）。别因为「它好像打不断
+			// 上行了」就把 `ownAbort` 拆掉改回调用者信号——那正是在修的缺陷。
+			//
+			// `fallbackSignal` 仍然必须在：`SettingsRouteDeps` 上这两个回调的信号是
+			// **可选**的（验台会直接 `listTabs()` 不带参数调），而 `controller.execute`
+			// 要求必填。
+			listTabs: signal => controller.execute('tabs.list', {}, signal ?? fallbackSignal.signal),
+			activateTab: (tabId, signal) => controller.execute('tabs.activate', { tabId }, signal ?? fallbackSignal.signal),
 			...(origin === undefined ? {} : { origin }),
 		})
+		// 兜底信号的归宿：**插件卸载**时把它 abort，让还在途的 `tabs.list` /
+		// `tabs.activate` 立刻结束，而不是留一个 60 秒后才超时的待办。
+		// 这一条挂在**插件 ctx** 上：它是插件级资源，不该随某次挂载一起消失，所以
+		// 与下面 route.dispose 那条（挂在 inject fiber 上）分开成两个处置。
+		ctx.effect(() => () => fallbackSignal.abort(), 'browser-bridge: tabs signal')
 		// 处置挂在 `scope` 上：`inject` 的 fiber 被换掉/卸载时路由跟着摘掉，不会留下
 		// 一个指向旧 controller 的僵尸端点。scope 不是真 ctx 时才退回插件自己的 ctx。
 		const effect = typeof (scope as { effect?: unknown }).effect === 'function'
 			? (scope as { effect: EffectFn }).effect.bind(scope)
 			: (ctx as unknown as { effect: EffectFn }).effect.bind(ctx)
 		try {
-			effect(() => webServer.register!(route), 'browser-bridge: settings route')
+			// `webServer.register` 返回它自己的摘除函数；把路由的 `dispose` 挂在它后面，
+			// 让「路由摘掉」与「缓存里还在途的那次取数结束」成为同一个动作。
+			// 顺序无关紧要：两者都是幂等的，而且都只是松开资源。
+			//
+			// 这条清理在**正常处置路径上一定会执行**：插件卸载、`scope`（inject 的
+			// fiber）被处置——`effect` 的处置挂在 `scope` 上，外层被处置时它必然跟着跑。
+			//
+			// 唯一不执行的情形是**宿主进程被强杀**：那时整个进程的内存都没了，谈不上
+			// 资源归还，这不是洞，也不需要堵。所以别把这里读成「有个已知缺陷」。
+			//
+			// 中间地带如实记一笔：「`webServer` 服务被换掉」是否会处置那个 inject fiber，
+			// 取决于宿主实现，我在本机取不到证（宿主是打包的 asar，`getOrigin` 之类
+			// 标识符在 asar 里只命中第三方 Excel 组件）。若宿主确实会处置 fiber，这条
+			// 清理就跟着跑；若不处置，这条清理不跑，但那种情况下路由本身也还挂在旧
+			// 服务上——两者同生同灭，不会出现「路由还活着、缓存却被拆了」的半截状态。
+			effect(() => {
+				const unregister = webServer.register!(route)
+				return () => {
+					if (typeof unregister === 'function') unregister()
+					route.dispose?.()
+				}
+			}, 'browser-bridge: settings route')
 		} catch (error) {
 			ctx.logger.warn(`browser-bridge: settings route not mounted: ${errorMessage(error)}`)
 		}

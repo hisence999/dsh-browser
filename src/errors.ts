@@ -31,6 +31,8 @@ export type BridgeErrorCode =
 	| 'incognito_unavailable' // 浏览器没给扩展无痕/InPrivate 权限（隔离实例开不出来，玩家得去扩展页打开）
 	| 'window_minimized'     // 目标窗口最小化：没有合成器帧，出图/出 PDF 之前就被拒（可带 restoreWindow）
 	| 'capture_timeout'      // 出图类调用在预算内没回来：窗口不产帧（被遮挡/卡住），已放弃且零副作用
+	| 'launch_not_found'    // browser_launch 找不到可启动的浏览器（试过的路径都在 message 里）
+	| 'launch_failed'       // browser_launch 找到了但 spawn 失败（进程没起来，零副作用）
 	| 'command_failed';      // 扩展明确回了失败
 
 /**
@@ -123,6 +125,8 @@ const HINTS: Record<BridgeErrorCode, string> = {
 	window_minimized: '那个标签页所在的浏览器窗口是最小化的——Chromium 不产帧，截图/PDF 这类出图调用只会一直挂着，不是选择器或页面问题。三条路：把那个窗口恢复、改用另一个可见窗口里的标签页、或者这次调用显式带上 restoreWindow:true（扩展会临时恢复窗口、拍完再放回最小化；不抢焦点）。注意：PDF 走打印排版，最小化窗口上也能出（browser_pdf 不受这条限制）。不要原样重试。',
 	capture_timeout: '出图调用在预算内没有返回：目标窗口不产帧（最小化、被完全遮挡，或页面卡住）。这次已经放弃，没有任何副作用。先用 browser_read / browser_find 确认页面还在；要图就换一个可见窗口的标签页，或带 restoreWindow:true 再试一次；不要连续重试。',
 	command_failed: '扩展报回失败：按 error 文本处理，通常是选择器没命中、标签页已关闭或页面不允许该操作。',
+	launch_not_found: '找不到可启动的浏览器：这不是故障，是这台机器上没有装在常见位置、PATH 里也没有、目录搜索也没扫到。请让用户在设置页「浏览器路径」里填上浏览器可执行文件的完整路径（Edge 一般是 C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe，Chrome 一般是 C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe），或者由用户自己打开浏览器。不要重复调用本工具——同样的环境不会给出不同结果。',
+	launch_failed: '找到了浏览器但进程没拉起来（EACCES / 路径失效 / 被安全软件挡住）：这一次没有任何副作用，浏览器也没启动。请用户确认那个路径确实可执行、安全软件没拦，必要时在设置页改「浏览器路径」；不要原地重试。',
 };
 
 /**

@@ -215,7 +215,7 @@ profile 里给 `browser-bridge` 打开 `lazyToolDocs: true`（或设置页开关
 
 | 维度 | 行为 |
 |---|---|
-| 全开（默认） | 23 个工具全部注册，每个都是它自己那份完整描述与完整参数 schema |
+| 全开（默认） | 24 个工具全部注册，每个都是它自己那份完整描述与完整参数 schema |
 | 懒启动 | 只为模型保留一个 `browser_tools`；其余 22 个工具**根本不在工具块里**，模型无从调用 |
 | 装载后不变形 | `browser_tools` 调用的就是全开模式里的**同一个定义对象**（`ctx.tools.register(definition)`），描述与 schema 逐字节相同——**不存在桩描述**这一层 |
 | 装载器描述 | 写清「未装载就调不到」「无参给目录」「一次调用装齐」，并把分组表与每个工具名都列出来，所以模型不必猜名字 |
@@ -227,7 +227,7 @@ profile 里给 `browser-bridge` 打开 `lazyToolDocs: true`（或设置页开关
 | 系统提示词 | 两种模式一字不差（不再有「先查 help」那句），懒启动下模型读到的是装载器自己的描述 |
 | 生效方式 | 配置改动由宿主重新加载插件；装载发生在会话中途时，新工具按宿主 `tools/change` 契约进**下一次装配**（当前这一步看不到）；装载器返回的 `scope` 是**落层的如实读回**（`session` / `global` / `unknown`），拿不到会话作用域的调用会退回全局层并报 `global` |
 | 失败可见 | 单件注册被拒（重名、闸门）进 `errors` 并点名，不算作已装载，也不阻塞同批其余项 |
-| 验收 | `verify_tool_docs.mjs` 断言：全开 23 个且无装载器、懒启动只有装载器、`"*"` 之后每个定义与全开模式逐字节相同、分组表恰好覆盖每个工具一次、`allowRawCdp:false` 两种模式都装不出 `browser_cdp`、两个假会话互不可见且重名不冲突、没有 agent 时如实报 `global`、插件卸载时会话级注册被一并摘除 |
+| 验收 | `verify_tool_docs.mjs` 断言：全开 24 个且无装载器、懒启动只有装载器、`"*"` 之后每个定义与全开模式逐字节相同、分组表恰好覆盖每个工具一次、`allowRawCdp:false` 两种模式都装不出 `browser_cdp`、两个假会话互不可见且重名不冲突、没有 agent 时如实报 `global`、插件卸载时会话级注册被一并摘除 |
 
 ## 原生 CDP（`browser_cdp`）
 
@@ -242,3 +242,55 @@ profile 里给 `browser-bridge` 打开 `lazyToolDocs: true`（或设置页开关
 | 脚本开关 | `allowScript: false` 也拒绝：CDP 能走到 `Runtime.evaluate`，只关 `browser_evaluate` 等于没关 |
 | 注册开关 | `allowRawCdp`（默认 true）决定这个工具是否注册；关闭后模型面看不到它，不是「调用时才拒绝」 |
 | 版本 | 需要扩展 **v1.0.20+**；旧扩展会报 `unknown command: cdp.call` |
+
+## 启动浏览器（`browser_launch`，v1.1.13）
+
+浏览器没开的时候扩展根本不在运行，没有任何东西能执行扩展命令——所以这条**不经过扩展**，由宿主进程自己把浏览器可执行文件拉起来。它是唯一一个「在浏览器之外才能解决浏览器问题」的工具。
+
+| 维度 | 行为 |
+|---|---|
+| 什么时候用 | `browser_info` 或任何工具报「扩展没连上」、且**用户确认浏览器是关着的**。浏览器开着但扩展坏了不归它管——那种情况要人去查扩展图标，这条工具帮不上，也不该被用来"试试看" |
+| 已经连着时 | 什么都不做，返回 `launched:false` / `connected:true` / `waitedMs:0`。重复启动只会多开一个用户没要求的窗口。`force:true` 才显式要求再起一个 |
+| 找浏览器 | **四级逐级下降，路径一律不写死**：① 配置里的 `browserPath`（设置页可填）——给了就**只用它**，填错如实报错、**绝不悄悄换成另一个浏览器**；② 各平台已知安装位置（Edge 优先于 Chrome，因为用户装扩展的那个最可能是 Edge）；③ `PATH` 搜索；④ 目录搜索兜底，**深度/条目数/耗时三道预算都有上限**（兜底搜索不能变成全盘扫描） |
+| 找不到时 | 报 `launch_not_found` + `not_started`（零副作用），文案里带上**试过几个位置、各级各试了几个、前几个具体路径**，并给三条出路（设置页填路径 / 改 `browserPath` / 让用户自己开）＋「不要重复调用，同样的环境不会给出不同结果」 |
+| spawn 失败 | 报 `launch_failed` + `not_started`（进程没起来）。`EACCES`/路径失效/被安全软件挡住都会走到这里 |
+| 启动方式 | `detached: true` + `stdio: 'ignore'` + `unref()` **三条缺一不可**：浏览器一直往 stdout 写（pipe 接不住会撑住宿主），而宿主退出时不许把它一起带走。默认**不带** `--user-data-dir`，所以起来的是用户自己那个带登录态的浏览器 |
+| 等扩展连上 | 浏览器起来 ≠ 扩展连上（service worker 唤醒 + 读配置 + WebSocket 握手，几百毫秒到数秒）。所以**轮询**桥接的 `extensionConnected` 而不是睡固定值；`handshakeMs` 夹在 1000–60000 |
+| 三种结果分开报 | ① 已经连着 → 什么都没做；② 起来了但没连上 → `connected:false`，文案说清**去查扩展**（没装/被禁用/端口或 Token 不一致），不是重试；③ 没找到/起不来 → 抛错，`not_started`。把"起来了"说成"能用了"是这个工具最坏的失败方式 |
+| 只读档 | **拒绝**（`LOCAL_SPAWN_COMMANDS`）。它不删东西，但它会在用户桌面上拉起一个程序——只读档的意思是「什么都不要改」，弹出一个窗口显然是改动。拒因专门说清这一点，并提醒「如果浏览器本来就开着，这条命令也帮不了你」 |
+| 配置项 | `browserPath`（字符串，默认空串 = 自动查找）。空串在这里**有含义**，所以不能兜底成任何默认路径；设置页那个输入框只去首尾空白，**不压平空白**——`C:\Program Files\…` 里那个空格是路径的一部分 |
+| 验收 | `verify_launch_resolve.mjs`（22 项：四级降级、显式路径独占、目录搜索的三道预算、失败可解释、各平台默认值，**不 spawn 任何东西**）与 `verify_launch_tool.mjs`（23 项：真跑工具路径，用一个立刻退出的假浏览器，覆盖已连着/force/夹取范围/两种失败/只读档） |
+
+## 输入框 `@` 菜单引用浏览器标签页（v1.1.12）
+
+用户的需求原话是「标签页无需包含无痕，Ai自己开的不算」。整条链路是：`client.js` 注册第二条 `@` 源 → 同源路由 `GET /browser-control/api/tabs` → 宿主 `controller.execute('tabs.list')` → 扩展 `cmdTabsList`。**没有新增工具**，模型那条工具面一个字都没变。
+
+| 维度 | 行为 |
+|---|---|
+| 源的注册 | `inputTriggers.registerSource({trigger:'@', name:'browser-tabs', order:20, …})`。名字必须与宿主内置的 `reference` / `skill` 不同：注册表撞名会抛 `slash source "@browser-tabs" is already registered`，而那条异常会把**整个** `@` 菜单一起带坏，不只我们这一组 |
+| 依赖声明 | `inputTriggers` **不在**模块顶层 `inject` 里，走 `ctx.inject(['inputTriggers'], cb)` 声明式等待。放进 `inject` 就是硬依赖，服务缺失时整个模块不激活，设置页会跟着消失——`@` 菜单是锦上添花，不许连坐 |
+| 列谁 | 只列**用户自己打开的、正常罐里的 `http(s)` 页**。三条过滤（宿主侧 `selectReferenceTabs`）：`incognito === true` 丢掉；`openedByAgent === true` 丢掉；URL 不是 `http(s)` 的丢掉（`chrome://` / `about:blank` / 扩展页都是菜单噪音） |
+| 「AI 自己开的」怎么判 | 看 `openedByAgent`，**不是** `owned`。`owned` 的语义是「被 AI 拥有」，用户把自己的页拖进 AI 那个组之后也会变成 `owned:true`——按 `owned` 过滤会把用户最想引用的那类页静默吞掉。`openedByAgent` 只记 `tabs.open` **真的新建**的页（`extension/background.js` 的 `markOpenedByAgent`，唯一调用点在 `cmdTabsOpen` 末尾），用户把页递过来永远不会写它 |
+| 记录的生命周期 | 记在 `chrome.storage.session` 的 `agentState.openedByAgent`，进 `normalizeAgentState` 白名单（否则 service worker 被回收后字段被丢掉，AI 开的页会出现在菜单里）。`forgetOwned` 会一并删掉它——tabId 会被 Chrome 复用，幽灵记录会让用户以后那页**永久**从菜单消失 |
+| 缺失字段 | 老扩展不发 `openedByAgent` 时按 `false` 处理（fail-open）：宁可多列，也不要让菜单空得像坏了 |
+| 排序 | active 优先 → `windowId` 升序 → `id` 升序，**全序**。`candidates` 每按一个键调一次，顺序会抖动的菜单会让用户按回车时选到别的页，而选错的代价是把一段 URL 插进消息里 |
+| 上限 | 一次最多 50 行（`TAB_REFERENCE_LIMIT`），但 `total` 报**过滤后、截断前**的数量。开满标签页的浏览器很容易超过 50，菜单据此可以说「还有更多」 |
+| 缓存 | TTL 2000ms（`TAB_REFERENCE_TTL_MS`）。`candidates` 是每键一次的回调，而每次取数都要跨 WebSocket 问一次扩展；两秒内复用一份结果，键盘连击不会变成命令风暴。代价是「刚开的页最迟两秒后才出现」，用户察觉不到。并发的读**共享同一个** in-flight，连打三个字母不是三条上行命令 |
+| `stale` 的语义 | **一条年龄判据**：`stale === (now() - fetchedAt) > ttlMs`，读取时现算，不在任何分支上写死。所以 TTL 内命中报 `false`、取数失败退回过期快照报 `true`，两条性质在同一条规则下同时成立 |
+| 取数失败 | 有旧快照就回落旧快照（`stale:true`），一次都没成功过才把错误抛给客户端。浏览器关着呢，菜单不该整个空掉 |
+| 取消一个调用者 | 共享的那次上行**不挂在任何一个调用者的 signal 上**：缓存自己持有 `ownAbort`，调用者的 signal 只用来 `Promise.race` 决定「自己还要不要等」。否则 A 关掉菜单会带着 B 一起 `AbortError`，B 落进 `tabs_failed`，菜单**谎报「浏览器未连接」**。代价是关菜单不取消那次只读取数，有 TTL 兜底 |
+| 失败之后 | in-flight 的清理挂在结算回调（`run.then(settle, settle)`）里、并且 `if (inflight === run)` 才清，**不能**搬回 `finally`：`fetchTabs` **同步**抛错时 `finally` 会先跑、然后 `inflight = run` 又把那个已失败的 promise 装回去，此后每次读都拿到同一个 rejection——**失败一次就永久报断线**。异步 reject 路径在 `finally` 里偶然是对的，所以这条只在同步抛错时才现形 |
+| 没有数据源 | 宿主没接上 `listTabs` 时回 **501 `tabs_unavailable`**，不静默回空列表。空列表在用户眼里等于「我确实没开标签页」，而真相是这条链路没接上 |
+| 链路断了 | `candidates` 返回**恰好一条**提示候选（`{name:'浏览器未连接（点这里没有作用）', value:'{"unavailable":true}'}`），点它返回 `'handled'`（零副作用）。不抛错：`candidates` 抛错只会让这一组静默消失，用户看到的是「我按了 @ 但什么都没有」 |
+| 确实没有可列的页 | 返回空数组，**不**编提示候选。用户真的没开页，编一条提示只会让他以为链路坏了 |
+| 字段白名单 | `GET /tabs` 每行**只有** `{id, title, url, windowId, active}` 五个字段，`incognito` / `owned` / `openedByAgent` / `yielded` 一个都不外泄。这是隐私边界：这些内部判定一旦透传出去，就会进输入框菜单、进客户端、进以后任何加在这条链路上的东西 |
+| chip 外观 | `appearance` **刻意不传**。它只接受 `session` / `file` / `folder`，给 `file` 会让 chip 渲染成「可点击打开本地文件」并带上 `openable` 类——那是对着一个浏览器标签页视觉谎报。缺省时宿主渲染一个普普通通的 `@` 标记，那才是诚实的 |
+| **模型看到什么** | `codec.serialize()` 的返回值，逐字拼进用户消息正文：有标题 `浏览器标签页「<标题>」 <url>`，无标题 `浏览器标签页 <url>`，坏 ref 原样返回。**绝不以 `@` 开头**——见下一条 |
+| 为什么不能以 `@` 开头 | 宿主给模型注入的 `FILE_REFERENCE_PROMPT`（`@deepseek-ai/dsh-file-reference/lib/index.js`，由 `dsh-file-reference-local/lib/index.js:342-346` 用 `scope.systemPrompt.section(...)` 注册）原话是「Tokens prefixed with `@` are paths the user explicitly referenced … **Anything else is a file: use the read tool when its contents are needed**」。任何 `@` 开头的 token 都会被模型当成文件路径去 `read`，拿一个 ENOENT。`@browser-tab https://…` 恰好落在那个语法里 |
+| 剪贴板同一串 | `codec.clipboardText`、`onPick` 的 `insert.clipboardText` 与 `serialize` 共用同一个 `referenceTextOf()`。三个出口不许有两套口径：用户把正文复制回输入框时，以 `@` 开头的那半句会被编辑器当成文件 chip，同一个坑从另一边进来 |
+| 点 chip | `openReference` → `POST /browser-control/api/tabs/activate` → `controller.execute('tabs.activate')` → 扩展把页叫到前台。不 await、不抛（顺手副作用，失败静默）；解析不出正整数 `tabId` 时返回 `false` 且不发请求 |
+| 只读档 | `tabs.list` 在只读白名单里，所以 `@` 菜单**照常列**；`tabs.activate` 不在白名单，只读档下点 chip 会拿到 `blocked_by_policy`，静默失败。这是刻意的：看得到不等于叫得动 |
+| 相对路径 | `client.js` 用 `fetch('browser-control/api/tabs')`（相对路径，与既有 `/status` 一致）。它按**文档 URL** 解析，与 SPA 路由无关；宿主 `frontend-static` 会给 index.html 注入 `<base href="./">`，前端 bundle 里没有 `location.pathname` / `history.pushState` / `/c/` 字面量，所以当前 GUI 不改变文档 URL |
+| 宿主信任闸 | 两个端点都过既有的 `isTrusted` 三道闸（Host 必须是回环或本监听器自己的 origin、`sec-fetch-site: cross-site` 拒绝、带 Origin 时必须等于本请求的 authority）。`POST /tabs` → 405（`use GET`）、`GET /tabs/activate` → 405、缺 `content-type: application/json` → 415、`tabId` 非正整数 → 400 `bad_field` |
+| 验收 | `verify/verify_tab_list_route.mjs`（扩展侧 `openedByAgent` 语义 + 宿主路由的过滤/排序/上限/缓存/降级/字段白名单/信任闸，101 项）与 `verify/verify_tab_reference_source.mjs`（客户端源契约，63 项）。两条断言在修复前是红的：把 `openedByAgent` 换成 `owned`、把 `stale` 写成按分支的常量 |
+| 一条刻意留下的等价变异体 | `settle` 里的 `if (inflight === run) inflight = undefined` 那个比较，当前**没有任何可达时序**能证明它必要（`read()` 走 `inflight ?? start()`，`start()` 只在空时调用），所以杀掉它是等价变异体。留着是为了守住一条将来才成立的不变量：一旦有人把调用点改成「不判空就 `start()`」（并发下很可能），老 promise 的结算就会清掉新的 in-flight，退化成「同一时刻两次上行 + 第二个调用者拿到旧结果」。**为杀掉一个变异体去删一段防御性代码是本末倒置**；成本是一次指针比较 |
