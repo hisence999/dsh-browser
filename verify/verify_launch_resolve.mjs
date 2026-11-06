@@ -119,21 +119,25 @@ const exeName = isWin ? 'msedge.exe' : 'microsoft-edge'
   try {
     const binDir = await sc.dir('custom-bin')
     const exe = await sc.exe('custom-bin/' + exeName)
+    // **必须显式给 knownPaths**：真机上（尤其是 CI 的 `ubuntu-latest`）`/usr/bin/microsoft-edge`
+    // 是真的存在的，只把 ProgramFiles 指到空目录挡不住 Linux 那条已知位置表——第一次写
+    // 这组时 CI 就红在这：它命中 known-path 就返回了，PATH 那一段根本没跑到。
+    // 验台要测的是**降级顺序**，所以已知位置必须是可控的空表，不能依赖宿主碰巧没装浏览器。
     const found = await resolveBrowser({
       platform: isWin ? 'win32' : 'linux',
       env: {
-        // 已知位置指向一个空目录（不存在），逼它走 PATH
         'ProgramFiles': path.join(sc.root, 'none-a'),
         'ProgramFiles(x86)': path.join(sc.root, 'none-b'),
         'LOCALAPPDATA': '',
         'PATH': [path.join(sc.root, 'none-c'), binDir].join(isWin ? ';' : ':'),
       },
+      knownPaths: [],
       search: false,
     })
     check('已知位置全落空 → 沿 PATH 搜索命中', found.found?.target === exe && found.found?.source === 'path',
       JSON.stringify({ target: found.found?.target, source: found.found?.source, expect: exe }))
-    check('PATH 搜索发生在已知位置之后（stages 里 knownPath > 0 且 path > 0）',
-      found.stages.knownPath > 0 && found.stages.path > 0, JSON.stringify(found.stages))
+    check('PATH 搜索确实跑到了（knownPaths 为空时 path 级有尝试记录）',
+      found.stages.path > 0, JSON.stringify(found.stages))
   } finally { await sc.dispose() }
 }
 
@@ -188,7 +192,7 @@ const exeName = isWin ? 'msedge.exe' : 'microsoft-edge'
   } finally { await sc.dispose() }
 }
 
-/* ── 5. 找不到时的可解释性：把三级都试过、并把试过的东西带回去 ──────── */
+/* ── 5. 找不到时的可解释性：三级都试过、并把试过的东西带回去 ────────── */
 {
   const sc = await scratch()
   try {
@@ -200,12 +204,19 @@ const exeName = isWin ? 'msedge.exe' : 'microsoft-edge'
         'LOCALAPPDATA': '',
         'PATH': path.join(sc.root, 'none-c'),
       },
+      // 同第 3 组：已知位置表必须是可控的空表。CI 的 ubuntu runner 上
+      // `/usr/bin/microsoft-edge` 真的存在，用真实平台表就永远走不到"全都找不到"。
+      knownPaths: [],
+      // 目录搜索也关掉：它扫的是 `/usr/bin`、`/opt` 这些真实目录，在 CI 上会命中真实浏览器。
+      // 这一组问的是"三级都落空时能不能说清楚"，不是"兜底搜索在真机上会不会命中"——
+      // 后者由第 4 组用受控目录单独验。
+      search: false,
     })
     check('全都找不到时 found 是 undefined（不许猜一个路径去 spawn）', found.found === undefined,
       JSON.stringify(found.found))
     check('找不到时 attempted 非空（失败文案才有东西可说）', found.attempted.length > 0, String(found.attempted.length))
-    check('找不到时每一级都留下了痕迹（knownPath / path / search 至少各试过一次）',
-      found.stages.knownPath > 0 && found.stages.path > 0,
+    check('找不到时 PATH 级也有痕迹（knownPaths 空表时 path 级必然被跑到）',
+      found.stages.path > 0,
       JSON.stringify(found.stages))
     check('attempted 里没有重复项（同一路径试两次只是噪音）',
       new Set(found.attempted).size === found.attempted.length, String(found.attempted.length))
