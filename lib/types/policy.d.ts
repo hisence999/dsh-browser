@@ -32,6 +32,18 @@ export declare const SCRIPT_COMMANDS: ReadonlySet<string>;
  */
 export declare const LOCAL_DESTRUCTIVE_COMMANDS: ReadonlySet<string>;
 /**
+ * 不经过扩展、会**在用户屏幕上拉起一个程序**的插件本地命令。
+ *
+ * `browser_launch` 要在浏览器没开的时候把它启动起来——那时扩展根本不在运行，没有
+ * 任何东西能执行命令，所以这件事只能由宿主进程自己 spawn。它因此天然绕开每一张
+ * 扩展命令表，必须单独登记：只读档下"在用户桌面弹出一个窗口"毫无疑问属于改写
+ * 状态的范畴，而它的成本也是可见的（一个窗口、一次冷启动）。
+ *
+ * 与 `LOCAL_DESTRUCTIVE_COMMANDS` 分开列，因为**拒因不同**：那是"删东西不可逆"，
+ * 这是"往用户的桌面上放一个窗口"，文案必须各自说清。
+ */
+export declare const LOCAL_SPAWN_COMMANDS: ReadonlySet<string>;
+/**
  * 明确登记「会改页面 DOM」的命令 —— 只读档里必须拒，理由写在名字旁边。
  *
  * 现在往页面 `<html>` 下插宿主的只有 `hold`（接管浮层）。AI 高亮框是**扩展侧自动**做的

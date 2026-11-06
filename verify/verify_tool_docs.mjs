@@ -73,9 +73,12 @@ const call = async (definition, args, exec) => {
 
 const eager = boot({ lazyToolDocs: false })
 const eagerNames = [...eager.tools.keys()].sort()
+/** 源码里的工具总数（含装载器）——数量断言一律从它推导，不再硬编码。 */
+const EAGER_TOTAL = eagerNames.length
 
 // ---- 1) 全开模式：每个工具都在，描述就是它自己的完整描述 ----
-check('全开模式默认注册 23 个工具（22 个工具 + browser_cdp）', eagerNames.length === 23, `${eagerNames.length}`)
+check(`全开模式默认注册 ${EAGER_TOTAL} 个工具（分组表里的每一个 + browser_cdp 等全部注册项）`,
+  EAGER_TOTAL === Object.values(TOOL_GROUPS).flat().length, `${EAGER_TOTAL} vs ${Object.values(TOOL_GROUPS).flat().length}`)
 check('全开模式没有装载器 browser_tools', !eager.tools.has('browser_tools'), eagerNames.join(','))
 check('browser_help 已删除（描述完整就不需要第二个入口）', !eager.tools.has('browser_help'))
 check('全开模式注册了 browser_cdp（allowRawCdp 默认开）', eager.tools.has('browser_cdp'))
@@ -112,7 +115,7 @@ const loader = lazy.tools.get('browser_tools')
 const catalog = await call(loader, {})
 check('目录调用过输出 schema', catalog.violations.length === 0, catalog.violations.join(' | '))
 check('目录里什么也还没装载', catalog.value.exposed.length === 0, catalog.value.exposed.join(','))
-check('目录列出全部 23 个工具（懒启动下都一样能装）',
+check(`目录列出全部 ${EAGER_TOTAL} 个工具（懒启动下都一样能装）`,
   stable(catalog.value.available.map(row => row.name).sort()) === stable(eagerNames),
   `${catalog.value.available.length} vs ${eagerNames.length}`)
 check('目录里没有重复项', new Set(catalog.value.available.map(row => row.name)).size === catalog.value.available.length)
@@ -153,7 +156,7 @@ check('"read" 装的就是分组表里那几个',
 }
 {
   const rest = await call(loader, {})
-  check('目录只剩没装载的 16 个', rest.value.available.length === 23 - TOOL_GROUPS.read.length, `${rest.value.available.length}`)
+  check('目录只剩没装载的那些', rest.value.available.length === EAGER_TOTAL - TOOL_GROUPS.read.length, `${rest.value.available.length} vs ${EAGER_TOTAL - TOOL_GROUPS.read.length}`)
   check('已装载的不再出现在目录里', rest.value.available.every(row => !TOOL_GROUPS.read.includes(row.name)))
   check('目录回显已装载清单', stable(rest.value.exposed) === stable([...TOOL_GROUPS.read].sort()), rest.value.exposed.join(','))
 }
@@ -219,7 +222,8 @@ check('"*" 之后 exposed 报的清单不含装载器自己（它不是可调用
 {
   const eagerNoCdp = boot({ lazyToolDocs: false, allowRawCdp: false })
   check('全开 + allowRawCdp:false：browser_cdp 不注册', !eagerNoCdp.tools.has('browser_cdp'))
-  check('全开 + allowRawCdp:false：其余 22 个照常', eagerNoCdp.tools.size === 22, `${eagerNoCdp.tools.size}`)
+  check('全开 + allowRawCdp:false：其余工具照常（只少了 browser_cdp 一个）',
+    eagerNoCdp.tools.size === EAGER_TOTAL - 1, `${eagerNoCdp.tools.size} vs ${EAGER_TOTAL - 1}`)
 
   const lazyNoCdp = boot({ lazyToolDocs: true, allowRawCdp: false })
   const loaderNoCdp = lazyNoCdp.tools.get('browser_tools')
@@ -228,7 +232,8 @@ check('"*" 之后 exposed 报的清单不含装载器自己（它不是可调用
     !catalogNoCdp.value.available.some(row => row.name === 'browser_cdp'), `${catalogNoCdp.value.available.length}`)
   const starNoCdp = await call(loaderNoCdp, { names: ['*'] })
   check('懒启动 + allowRawCdp:false：* 也装不出 browser_cdp', !lazyNoCdp.tools.has('browser_cdp'), starNoCdp.value.activated.join(','))
-  check('懒启动 + allowRawCdp:false：暴露集合 = 装载器 + 22 个工具', lazyNoCdp.tools.size === 23, `${lazyNoCdp.tools.size}`)
+  check('懒启动 + allowRawCdp:false：暴露集合 = 装载器 + 其余全部工具',
+    lazyNoCdp.tools.size === EAGER_TOTAL - 1 + 1, `${lazyNoCdp.tools.size} vs ${EAGER_TOTAL}`)
   const askCdp = await call(loaderNoCdp, { names: ['browser_cdp'] })
   check('懒启动 + allowRawCdp:false：点名要 browser_cdp 报 unknown 而不是假装装上',
     stable(askCdp.value.unknown) === stable(['browser_cdp']) && !lazyNoCdp.tools.has('browser_cdp'), stable(askCdp.value))

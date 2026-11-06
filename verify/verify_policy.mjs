@@ -17,7 +17,7 @@
 import { readFile, mkdtemp, writeFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { Config, apply, LOCAL_DESTRUCTIVE_COMMANDS, READ_ONLY_ALLOWED, SCRIPT_COMMANDS } from '../lib/index.js'
+import { Config, apply, LOCAL_DESTRUCTIVE_COMMANDS, LOCAL_SPAWN_COMMANDS, READ_ONLY_ALLOWED, SCRIPT_COMMANDS } from '../lib/index.js'
 
 let fails = 0
 /** 起监听是异步的：等端口真的在听，才能用 extension_offline 区分「放行」。 */
@@ -247,6 +247,14 @@ const READ_TOOLS = [
     used.length >= 1 && used.includes('cleanup'), `解析到 ${used.length} 个：${used.join(',')}`)
   const ghost = [...LOCAL_DESTRUCTIVE_COMMANDS].filter((c) => !used.includes(c))
   check('对账：LOCAL_DESTRUCTIVE_COMMANDS 每条都真的被 classify() 用到', ghost.length === 0, ghost.join(',') || 'none')
+  // `browser_launch` 那一类：它不删东西，但会在用户屏幕上拉起一个程序，所以单列一张表，
+  // 而且要**同样**对账——登记了却没人用，说明闸门根本没长在这条路上。
+  const spawnGhost = [...LOCAL_SPAWN_COMMANDS].filter((c) => !src.includes(`policyGate('${c}')`))
+  check('对账：LOCAL_SPAWN_COMMANDS 每条都在某个 policyGate() 调用处真的被用到',
+    spawnGhost.length === 0, spawnGhost.join(',') || 'none')
+  check('两张本地命令表不重叠（删东西与拉程序是两种不同的风险，拒因也不同）',
+    [...LOCAL_SPAWN_COMMANDS].every((c) => !LOCAL_DESTRUCTIVE_COMMANDS.has(c)),
+    [...LOCAL_SPAWN_COMMANDS].join(','))
 }
 
 // ---- 10) 隔离实例（allowIncognito）：默认关，且闸门必须在发出去之前 ----

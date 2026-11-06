@@ -43,6 +43,19 @@ export const SCRIPT_COMMANDS: ReadonlySet<string> = new Set(['eval', 'cdp.call']
 export const LOCAL_DESTRUCTIVE_COMMANDS: ReadonlySet<string> = new Set(['cleanup'])
 
 /**
+ * 不经过扩展、会**在用户屏幕上拉起一个程序**的插件本地命令。
+ *
+ * `browser_launch` 要在浏览器没开的时候把它启动起来——那时扩展根本不在运行，没有
+ * 任何东西能执行命令，所以这件事只能由宿主进程自己 spawn。它因此天然绕开每一张
+ * 扩展命令表，必须单独登记：只读档下"在用户桌面弹出一个窗口"毫无疑问属于改写
+ * 状态的范畴，而它的成本也是可见的（一个窗口、一次冷启动）。
+ *
+ * 与 `LOCAL_DESTRUCTIVE_COMMANDS` 分开列，因为**拒因不同**：那是"删东西不可逆"，
+ * 这是"往用户的桌面上放一个窗口"，文案必须各自说清。
+ */
+export const LOCAL_SPAWN_COMMANDS: ReadonlySet<string> = new Set(['launch'])
+
+/**
  * 明确登记「会改页面 DOM」的命令 —— 只读档里必须拒，理由写在名字旁边。
  *
  * 现在往页面 `<html>` 下插宿主的只有 `hold`（接管浮层）。AI 高亮框是**扩展侧自动**做的
@@ -101,6 +114,14 @@ export function policyRefusal(command: string, flags: PolicyFlags, params?: Reco
 	if (flags.readOnly && LOCAL_DESTRUCTIVE_COMMANDS.has(command)) {
 		return `只读模式已开启（readOnly: true）：命令 ${command} 会删除本机保存的截图与临时文件，删除不可逆，所以已被拒绝，没有任何文件被删除。`
 			+ `只读档的含义是「什么都不要改」，清理属于改动；要释放磁盘请由用户自己关掉 readOnly，${CONFIG_HINT}。不要原地重试本命令。`
+	}
+	// 启动浏览器同理：它不删东西，但它会在用户的屏幕上拉起一个程序。只读档的意思
+	// 是「什么都不要改」，而在桌面上弹出一个窗口显然是改动。拒因必须写清这一点，
+	// 否则模型会以为这是一条"只是打开一个工具"的命令、被拒得很莫名其妙。
+	if (flags.readOnly && LOCAL_SPAWN_COMMANDS.has(command)) {
+		return `只读模式已开启（readOnly: true）：命令 ${command} 会在你的桌面上启动一个浏览器程序（一个可见窗口、一次冷启动），已被拒绝，没有启动任何进程。`
+			+ `只读档的含义是「什么都不要改」；要启动浏览器请由用户自己关掉 readOnly 后重试，${CONFIG_HINT}。`
+			+ `另外：如果浏览器本来就开着、只是扩展没连上，这条命令也帮不了你——让用户看一眼扩展图标是不是绿色。不要原地重试本命令。`
 	}
 	// `hold` 带动作：on/off 改页面 DOM，status 只读（读 session 条目 + 探页面上那层还在不在），
 	// 所以只读档放行 status——只读档不该连「看一眼浮层现在是什么状态」都不让。

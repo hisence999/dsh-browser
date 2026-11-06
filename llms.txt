@@ -31,7 +31,7 @@ Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱�
 - 所有 HTTP 响应都不带 `Access-Control-Allow-Origin`
 - `/` 与 `/api/status` 免鉴权，只报链路状态
 - 两个本机策略开关（profile 的 `browser-bridge` 配置）：`readOnly: true` 拒绝一切会改变页面/浏览器状态或删本机文件的命令，`allowScript: false` 单独关掉 `browser_evaluate` 与 `browser_cdp`（两者都能在页面里执行任意脚本）。闸门在把命令发给扩展**之前**，所以被拒的调用零副作用；它们只约束模型那条工具面，HTTP 面按同一 token 走、不受影响，也**不是**防有权限的人
-- `lazyToolDocs: true` 只决定**暴不暴露**：全开时 23 个工具全注册；打开后只为模型保留一个 `browser_tools` 装载器，由它按需把工具注册进来。装上的工具拿到的就是它完整的描述与参数 schema（与全开时逐字节相同，不存在桩描述）。装载是**会话级**的：注册落进发起装载的那个 agent 的 scope，别的会话仍只有装载器，会话结束自动消失；装载器返回的 `scope` 是落层的如实读回。省的是每轮固定的工具块体积，不是安全边界
+- `lazyToolDocs: true` 只决定**暴不暴露**：全开时 24 个工具全注册；打开后只为模型保留一个 `browser_tools` 装载器，由它按需把工具注册进来。装上的工具拿到的就是它完整的描述与参数 schema（与全开时逐字节相同，不存在桩描述）。装载是**会话级**的：注册落进发起装载的那个 agent 的 scope，别的会话仍只有装载器，会话结束自动消失；装载器返回的 `scope` 是落层的如实读回。省的是每轮固定的工具块体积，不是安全边界
 - `allowRawCdp`（默认 true）控制是否注册 `browser_cdp`：原生 CDP 透传，受 `readOnly` / `allowScript` 约束，结果 20 000 字符截断并报真实大小
 - 扩展弹窗里的「锁定」是另一层：只有人工通道能开与关，冻结期间命令在扩展的 `runCommand` 入口就被拒绝（连接保持），读不出锁状态时按冻结处理（fail-closed）
 - `browser_hold`（接管浮层）是**软层**：它告诉用户模型在操作这一页并挡住误触，用户双击即可关掉；卡片上按「中止操作」后扩展拒绝 `click`/`input`/`press`/`nav`，但模型可以调 `hold action=off` 解除。它不是安全边界，也不是防逃逸手段——要冻住浏览器用扩展弹窗里的「锁定」
@@ -56,6 +56,35 @@ Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱�
 - `policy.jar = 'normal' | 'incognito'` 随每条命令下发：`incognito` 时 `tabs.open` 落在无痕窗口里（结果带 `isolated:true`），`resolveTab` 在没有粘性目标时优先取隔离窗口的当前页；`tabs.list` 每行带 `incognito`、顶层带 `isolatedWindowId`
 - 隔离罐里第 4 项那套照样成立（归属/分组/关闭守卫/让出）；`profile.close` 会连同归属、让出、目标一起清干净
 
+## 启动浏览器（`browser_launch`，v1.1.13）
+
+- 浏览器没开时扩展不在运行，所以这条**不经过扩展**：宿主进程直接 spawn 浏览器可执行文件，然后轮询桥接的 `extensionConnected` 等它连上
+- 找浏览器**四级降级、路径不写死**：配置 `browserPath`（给了就只用它，填错不降级）→ 各平台已知安装位置（Edge 优先）→ `PATH` 搜索 → 目录搜索兜底（深度/条目数/耗时三道预算，不会变成全盘扫描）
+- 找不到报 `launch_not_found`、spawn 失败报 `launch_failed`，都是 `not_started`（零副作用）；文案带「试过几个位置、各级几个、前几个具体路径」并给三条出路
+- 启动用 `detached + stdio:'ignore' + unref()`（浏览器活得比宿主久、且不会把宿主撑住）；默认不带 `--user-data-dir`，起来的是用户自己带登录态的那个
+- 三种结果分开报：已连着就什么都不做（`launched:false`）；起来了但没连上说清去查扩展（`connected:false`）；没找到/起不来就抛错
+- 只读档拒绝（`LOCAL_SPAWN_COMMANDS`）：它不删东西，但会在用户桌面上拉起一个程序
+- 配置项 `browserPath`（默认空串 = 自动查找；设置页可填，只去首尾空白、不压平空白）
+- 验收：`verify_launch_resolve.mjs`（22 项，纯逻辑不 spawn）+ `verify_launch_tool.mjs`（23 项，真跑工具路径但用一个立刻退出的假浏览器）
+
+## 输入框 `@` 菜单引用浏览器标签页（v1.1.12）
+
+- 需求原话：「标签页无需包含无痕，Ai自己开的不算。」链路是 `client.js` 的第二条 `@` 源 → 同源路由 `GET /browser-control/api/tabs` → `controller.execute('tabs.list')` → 扩展 `cmdTabsList`。**没有新增工具**，模型那条工具面一个字都没变
+- 源的注册：`inputTriggers.registerSource({trigger:'@', name:'browser-tabs', order:20, …})`。名字必须与宿主内置的 `reference` / `skill` 不同——注册表撞名会抛 `slash source "@browser-tabs" is already registered`，那条异常会把**整个** `@` 菜单一起带坏
+- `inputTriggers` **不进**模块顶层 `inject`，走 `ctx.inject(['inputTriggers'], cb)` 声明式等待：放进 `inject` 就是硬依赖，服务缺失时整个模块不激活，设置页会跟着消失
+- 列谁：扩展 `tabs.list` 每行新增 `openedByAgent`；宿主 `selectReferenceTabs` 丢掉 `incognito===true`、`openedByAgent===true`、非 `http(s)`，按 id 去重，排序 active 优先 → `windowId` → `id`（全序，因为 `candidates` 每键一次，顺序抖动会让用户选错行），上限 50 行但 `total` 报**过滤后、截断前**的总数
+- **「AI 自己开的」看 `openedByAgent`，不是 `owned`**：`owned` 语义是「被 AI 拥有」，用户把自己的页拖进 AI 组之后也是 `owned:true`——按它过滤会把用户最想引用的页静默吞掉。`openedByAgent` 只由 `cmdTabsOpen` 末尾的 `markOpenedByAgent` 写，用户递页永远不会写它；它必须进 `normalizeAgentState` 白名单（worker 回收后 AI 开的页还在屏幕上），并由 `forgetOwned` 一并删除（tabId 会被复用，幽灵记录会让用户的真页永久消失）。老扩展缺字段按 `false` 处理（fail-open）
+- 缓存：TTL 2000ms + 并发共享同一个 in-flight。`stale` 是**一条年龄判据** `stale === (now() - fetchedAt) > ttlMs`，读取时现算、不在任何分支写死——TTL 内命中报 `false`、取失败退回过期快照报 `true`，两条性质同一条规则。取失败有旧快照就回落，一次都没成功才抛
+- 失败形态：宿主没接 `listTabs` → **501 `tabs_unavailable`**（不静默回空列表，空列表等于谎报「你没开页」）；链路断了 `candidates` 返回**恰好一条**提示候选（`value:'{"unavailable":true}'`），点它返回 `'handled'` 零副作用；确实没页时返回 `[]` 不编提示（`candidates` 抛错只会让这组静默消失）
+- 隐私边界：`GET /tabs` 每行**只有** `{id,title,url,windowId,active}`，`incognito`/`owned`/`openedByAgent`/`yielded` 一个都不外泄
+- 模型看到什么：`codec.serialize()` 的返回值逐字拼进用户消息正文（`sinkSerialized` → `inputTriggers.serializeReference` → `owner.codec.serialize`），形如 `浏览器标签页「标题」 https://…`。**绝不以 `@` 开头**——宿主注入的 `FILE_REFERENCE_PROMPT`（`@deepseek-ai/dsh-file-reference/lib/index.js`，由 `dsh-file-reference-local/lib/index.js:342-346` 的 `scope.systemPrompt.section(...)` 注册）原话是「Tokens prefixed with `@` are paths the user explicitly referenced … Anything else is a file: use the read tool」，`@browser-tab` 会让模型去 read 一个不存在的路径
+- 三个出口一个口径：`codec.clipboardText`、`onPick.insert.clipboardText`、`codec.serialize` 共用 `referenceTextOf()`（剪贴板若以 `@` 开头，粘回输入框会变成指向 `browser-tab` 的文件 chip，同一个坑从另一边进来）
+- chip 外观：**刻意不传 `appearance`**。它只接受 `session`/`file`/`folder`，给 `file` 会把标签页画成「可点击打开本地文件」并加 `openable` 类——对着浏览器标签页视觉谎报；缺省渲染成一个普通的 `@` 标记
+- 点 chip：`openReference` → `POST …/tabs/activate` → `tabs.activate`。不 await 不抛（顺手副作用）；`tabId` 不是正整数时返回 `false` 且不发请求。只读档下 `tabs.list` 在白名单里所以**照常列**，`tabs.activate` 不在，点 chip 会拿到 `blocked_by_policy` 静默失败
+- 端点契约：`POST /tabs` → 405 `use GET`；`GET /tabs/activate` → 405；缺 `content-type: application/json` → 415；`tabId` 非正整数 → 400 `bad_field`；取数/激活失败 → HTTP 200 + `ok:false` + 原错误码（无则 `tabs_failed`）。两个端点都过既有的 `isTrusted` 三道闸
+- `client.js` 用**相对路径** `fetch('browser-control/api/tabs')`（与既有 `/status` 一致），按文档 URL 解析；宿主 `frontend-static` 给 index.html 注入 `<base href="./">`，前端 bundle 里没有 `location.pathname` / `history.pushState` / `/c/` 字面量，当前 GUI 不改文档 URL
+- 验收：`verify/verify_tab_list_route.mjs`（扩展侧 `openedByAgent` 语义 + 宿主路由全部行为）与 `verify/verify_tab_reference_source.mjs`（客户端源契约）。两条断言在修复前是红的：`openedByAgent` 换成 `owned`、`stale` 写成按分支的常量
+
 ## 分组名可配 / AI 操作高亮（v1.1.4）
 
 - 新配置 `tabGroupTitle`（字符串，默认 `'DSH'`）：**AI 新建标签组时用的名字**。**空串 = 不分组**，所以不能用 `|| 'DSH'` 兜底——「我不要分组」是真实选择，兜底会让它悄悄变回默认组。归一：压平空白 + 限长 40 字符（插件与 `/browser-control/api` 两处同一个上限）。改名字 = 之后新建的组用新名字，已经建好的老组按 id 仍然是 AI 的
@@ -67,7 +96,7 @@ Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱�
 
 ## 关键文件
 
-- `src/index.ts` - 23 个 `browser_*` 工具注册（含 `browser_cdp` / `browser_profile`；懒加载模式下换成唯一入口 `browser_tools`）+ settings 接线的版本兼容分支
+- `src/index.ts` - 24 个 `browser_*` 工具注册（含 `browser_cdp` / `browser_profile`；懒加载模式下换成唯一入口 `browser_tools`）+ settings 接线的版本兼容分支
 - `src/settings-routes.ts` - 设置页同源 JSON 面 `/browser-control/api`（Host 回环/Origin 信任栅栏 + `configEditor` 持久化）
 - `src/tool-help.ts` - `TOOL_GROUPS` 分组表（装载器的发现入口，与注册表对账）+ `groupOf` / `summarize`；不再有桩描述
 - `src/policy.ts` - 三张互不相同的表：只读白名单、脚本命令（`eval` / `cdp.call`）、插件本地破坏性命令（`browser_cleanup` 不经过 `execute()`，必须自己站闸门）

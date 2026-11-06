@@ -20,6 +20,7 @@
 import { type Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
 export { LOCAL_DESTRUCTIVE_COMMANDS, PAGE_MUTATING_COMMANDS, READ_ONLY_ALLOWED, SCRIPT_COMMANDS, policyRefusal } from './policy.ts';
+export { LOCAL_SPAWN_COMMANDS } from './policy.ts';
 /** Cordis plugin name used by loader diagnostics. */
 export declare const name = "browser-bridge";
 /** npm package name whose profile row the Settings page edits. */
@@ -128,6 +129,15 @@ export interface Config {
      * now" is exactly the question a user watching their own browser asks.
      */
     agentHighlight?: boolean;
+    /**
+     * 显式指定要启动的浏览器可执行文件路径（`browser_launch` 用）。
+     *
+     * 空串（默认）= 不指定，按「已知安装位置 → PATH 搜索 → 目录搜索兜底」自动找。
+     * 只有当自动查找在你机器上找不到、或者你装了便携版/非默认路径的浏览器时才需要填。
+     * **给了就只用它**：填错会如实报错，不会悄悄换成另一个浏览器——"我明明指定了"
+     * 变成谎话比找不到更糟。
+     */
+    browserPath?: string;
 }
 export declare const Config: z<Config>;
 /** Cordis plugin entry: wire the settings-driven lifecycle plus the model-facing tools. */

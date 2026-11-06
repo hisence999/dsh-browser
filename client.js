@@ -57,6 +57,7 @@ window.__ModuleLoader__.load({
 .bc-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--dsw-alias-bg-base); transition: transform .15s; }
 .bc-switch.on .bc-knob { transform: translateX(16px); }
 .bc-input { width: 220px; max-width: 100%; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-size: 12px; }
+.bc-input-wide { width: 360px; }
 .bc-input:hover { border-color: var(--dsw-alias-border-l1); }
 .bc-input:disabled { opacity: .5; cursor: default; }
 .bc-select { width: 220px; max-width: 100%; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-size: 12px; cursor: pointer; }
@@ -80,6 +81,11 @@ window.__ModuleLoader__.load({
     const TAB_GROUP_TITLE_MAX = 40;
     /** 分组名的契约默认值：用户没配过时 status 里也是它。 */
     const TAB_GROUP_TITLE_FALLBACK = 'DSH';
+    /**
+     * 浏览器路径的上限，与宿主同一个数（`src/settings-routes.ts` 的 `BROWSER_PATH_MAX`）。
+     * 这里也切一次只是为了让输入框别让人白打半屏——真值以宿主校验为准。
+     */
+    const BROWSER_PATH_MAX = 512;
 
     /** 发一个 JSON POST；端点回 `{ ok, value | error }`。 */
     async function post(path, body) {
@@ -171,6 +177,7 @@ window.__ModuleLoader__.load({
       tabGroupTitle: 'AI 开的标签页归进这个 Chrome 标签组。扩展按组记（不是按名字），所以改名字等于换一个新组；你自己那个同名组不会被合并，也不会被当成 AI 的。留空 = 不分组。',
       focusPolicy: '不抢焦点时不会调用 windows.update({focused:true})：真实键鼠走 CDP，本来就不需要窗口在前台。允许聚焦会先把窗口抬到前台。',
       userTakeover: '让出：你在 AI 正在操作的标签页上真的点了一下或敲了键盘之后，它在那页的点击/输入/按键/导航/滚动会被拒绝，并告诉模型怎么继续。只是切过去看、滚一下页面不算——切走或让它重新接管（activate）就恢复。忽略接管则不拦。',
+      browserPath: 'browser_launch 启动浏览器时用的可执行文件。留空 = 自动找（已知安装位置 → PATH → 目录搜索兜底），一般不用填。只有便携版、非默认路径、或自动查找在你机器上失败时才需要填完整路径。注意：填了就用它，填错会如实报错，不会悄悄换成另一个浏览器。',
     };
 
     /**
@@ -188,6 +195,246 @@ window.__ModuleLoader__.load({
     function normalizeTitle(raw) {
       return String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, TAB_GROUP_TITLE_MAX);
     }
+
+    /* ------------------------------------------------------------------ *
+     * 输入框的 `@` 引用源：列出用户自己打开的浏览器标签页
+     * ------------------------------------------------------------------ */
+
+    /**
+     * 源的名字。**必须与宿主内置的两条 `@` 源不同**（`reference` / `ui-skill`）：
+     * `registerSource` 用的是同一张注册表，撞名会直接抛
+     * `slash source "@browser-tabs" is already registered`，那条错误会把整个输入框的
+     * 菜单一起带坏，而不只是我们自己这一组。
+     */
+    const TAB_REFERENCE_SOURCE = 'browser-tabs';
+    /** 候选的小节标题。每条候选都给同一个串，宿主才把它们收拢到一组里。 */
+    const TAB_REFERENCE_SECTION = '浏览器标签页';
+    /** 菜单一行能显示多长：标题 60、描述 60。再长就会被宿主截断，不如我们自己切。 */
+    const TAB_NAME_MAX = 60;
+    const TAB_DESCRIPTION_MAX = 60;
+    /** 插进消息的 chip 上的文字上限（比候选短一档：chip 在正文里很窄）。 */
+    const TAB_LABEL_MAX = 48;
+
+    /**
+     * 引用在**正文里**的文本形态。`serialize` 与 `clipboardText` 共用这一个函数，
+     * 不许各写一套——它们是同一句话的两个出口（一个进消息、一个进剪贴板）。
+     *
+     * **绝不以 `@` 开头**，这条是硬约束：宿主注入的系统提示段（`FILE_REFERENCE_PROMPT`）
+     * 原话是「Tokens prefixed with `@` are paths the user explicitly referenced …… Anything
+     * else is a file: use the read tool when its contents are needed」。也就是说任何以 `@`
+     * 开头的非空白 token，模型都会被明确指示「那是一个文件路径，去 read 它」——我们的
+     * `@browser-tab https://…` 恰好落在那个语法里，模型极可能去 `read("browser-tab")`
+     * 拿一个 ENOENT，然后才反应过来。所以这里用一个自述式的中文短语开头，模型一眼就
+     * 知道这是浏览器标签页而不是文件。
+     *
+     * 剪贴板同样用这一串：用户把正文复制回输入框时，以 `@` 开头的那半句会被编辑器当成
+     * 文件 chip，指向一个名叫 browser-tab 的路径——同一个坑从另一边进来。
+     * @param url - 完整 URL（必须完整可点，它是模型唯一能直接使用的东西）。
+     * @param title - 页面标题；空白时省略括号。
+     */
+    function referenceTextOf(url, title) {
+      const clean = String(title ?? '').replace(/\s+/g, ' ').trim();
+      return clean.length === 0 ? `浏览器标签页 ${url}` : `浏览器标签页「${clean}」 ${url}`;
+    }
+
+    /** 截断到 `max` 个字符，加省略号。 */
+    function clip(text, max) {
+      const value = String(text ?? '');
+      return value.length <= max ? value : value.slice(0, Math.max(0, max - 1)) + '…';
+    }
+
+    /**
+     * `host + pathname`：菜单里那一行描述。query 与 hash 都丢掉——它们往往又长又
+     * 带一堆参数，挤掉真正能区分两个页面的那半句。
+     */
+    function hostPathOf(url) {
+      try {
+        const parsed = new URL(String(url));
+        return `${parsed.host}${parsed.pathname}`;
+      } catch {
+        return String(url ?? '');
+      }
+    }
+
+    /**
+     * 菜单每敲一个键都会调用一次 `candidates`，而每次都打一次 HTTP。宿主侧有两秒缓存
+     * 兜住大半，这里不额外做防抖：宿主缓存已经吸收掉连击，再加一层只会让「刚开的页」
+     * 更晚出现。
+     */
+    async function fetchReferenceTabs(signal) {
+      const res = await fetch(`${API}/tabs`, { headers: { accept: 'application/json' }, signal });
+      // 先读文本再自己解析：宿主对**没注册过的路径**回的是 404 空体，`res.json()` 会抛
+      // 一句 `Unexpected end of JSON input`——它看起来像网络坏了，实际是路由没挂上。
+      const text = await res.text();
+      let payload = null;
+      try { payload = text.length === 0 ? null : JSON.parse(text); } catch { payload = null; }
+      if (!payload || payload.ok !== true) {
+        const reason = payload && payload.error && payload.error.message
+          ? String(payload.error.message)
+          : `HTTP ${res.status}`;
+        throw new Error(reason);
+      }
+      return payload.value || {};
+    }
+
+    /**
+     * 链路不通时给的那一条候选。
+     *
+     * 菜单空着和菜单坏掉在用户眼里没有区别，都是「`@` 里没有我的标签页」。给一条说明
+     * 至少能把「浏览器没连上」和「确实没有可列的页」分开。点它没有副作用（`onPick`
+     * 直接返回 `'handled'`），文案里必须写明这一点，否则用户会以为点坏了什么。
+     */
+    function unavailableCandidate() {
+      return {
+        name: '浏览器未连接（点这里没有作用）',
+        description: '在「设置 → 浏览器控制」查看链路状态',
+        section: TAB_REFERENCE_SECTION,
+        value: JSON.stringify({ unavailable: true }),
+      };
+    }
+
+    /**
+     * `@browser-tabs` 源。
+     *
+     * `order: 20` 把我们的组排在内置 `reference` / `ui-skill` 之后（它们没有 order，
+     * 即 0）：用户按 `@` 时第一组仍然是宿主自带的文件引用，这符合原来的肌肉记忆。
+     * `showGroupTitle: false` 是因为我们自己给每条候选带了 `section`——让宿主按
+     * section 分组，比在组标题里再写一遍「浏览器标签页」更省一行。
+     */
+    const tabReferenceSource = {
+      trigger: '@',
+      name: TAB_REFERENCE_SOURCE,
+      order: 20,
+      showGroupTitle: false,
+
+      async candidates(_session, request) {
+        const signal = request && request.signal;
+        // 已经取消的请求不必再打一次网络：连打几个字母时宿主会撤掉前几次调用。
+        if (signal && signal.aborted) return [];
+        const query = String((request && request.query) || '').trim().toLowerCase();
+        let value;
+        try {
+          value = await fetchReferenceTabs(signal);
+        } catch (error) {
+          // 用户主动取消不是失败：返回空，别在菜单里塞一条「未连接」的假警报。
+          if (signal && signal.aborted) return [];
+          return [unavailableCandidate()];
+        }
+        const tabs = Array.isArray(value.tabs) ? value.tabs : [];
+        const rows = tabs
+          .filter(tab => {
+            if (!query) return true;
+            const title = String((tab && tab.title) || '').toLowerCase();
+            const url = String((tab && tab.url) || '').toLowerCase();
+            return title.includes(query) || url.includes(query);
+          })
+          .map(tab => ({
+            name: clip(tab && tab.title, TAB_NAME_MAX),
+            description: clip(hostPathOf(tab && tab.url), TAB_DESCRIPTION_MAX),
+            section: TAB_REFERENCE_SECTION,
+            // 私有载荷：只有 codec 与 openReference 读它，宿主不解释里面的字段。
+            value: JSON.stringify({
+              tabId: tab && tab.id,
+              url: String((tab && tab.url) || ''),
+              title: String((tab && tab.title) || ''),
+            }),
+          }));
+        // 取到了、但过滤后一页都没有 → 空数组。这里**不**塞提示候选：用户的浏览器确实
+        // 没开着可列的页，编一条提示只会让他以为链路坏了。
+        return rows;
+      },
+
+      onPick({ candidate }) {
+        let payload;
+        try {
+          payload = JSON.parse(String(candidate && candidate.value));
+        } catch {
+          return 'handled';
+        }
+        // 提示候选：菜单关掉就好，别往消息里插一段说明文字。
+        if (!payload || payload.unavailable === true) return 'handled';
+        const ref = JSON.stringify({
+          tabId: payload.tabId,
+          url: payload.url,
+          title: payload.title,
+        });
+        return {
+          insert: {
+            source: TAB_REFERENCE_SOURCE,
+            ref,
+            label: clip(payload.title || hostPathOf(payload.url), TAB_LABEL_MAX),
+            // 与 codec.serialize 同一串（理由见 referenceTextOf）：正文与剪贴板不许有两套口径。
+            clipboardText: referenceTextOf(payload.url || '', payload.title),
+            // 刻意**不传** `appearance`：它只接受 session/file/folder，给 `file` 会让
+            // chip 渲染成「可点击打开本地文件」，而我们的引用指向的是一个浏览器标签页。
+            // 缺省时宿主渲染一个普普通通的 `@` 标记，那才是诚实的。
+          },
+        };
+      },
+
+      /**
+       * 点 chip 时把那一页叫到前台。
+       *
+       * 不 await、不抛：这是一次**顺手的**副作用（用户点引用只是想回去看那一页），
+       * 失败了不该弹任何东西，更不该挡住 chip 的其他行为。`tabs.activate` 会经过宿主
+       * 的策略闸门，所以只读档下它会被拒——那也是静默的，符合「点一下没反应」的预期。
+       */
+      openReference(_session, { ref }) {
+        let payload;
+        try {
+          payload = JSON.parse(String(ref));
+        } catch {
+          return false;
+        }
+        const tabId = payload && payload.tabId;
+        if (typeof tabId !== 'number' || !Number.isInteger(tabId) || tabId <= 0) return false;
+        try {
+          void post(`${API}/tabs/activate`, { tabId }).catch(() => {});
+        } catch {
+          // post 是 async 函数，同步段不抛；这里只兜底「fetch 本身不存在」这种环境问题。
+        }
+        return true;
+      },
+
+      codec: {
+        /**
+         * 复制 quote 时进剪贴板的文字：与 `serialize` 同一串（见 `referenceTextOf`）。
+         * 解析失败就把 ref 原样吐回，别抛。
+         */
+        clipboardText(ref) {
+          try {
+            const payload = JSON.parse(String(ref));
+            const url = String((payload && payload.url) || '');
+            if (url.length === 0) return String(ref);
+            return referenceTextOf(url, payload.title);
+          } catch {
+            return String(ref);
+          }
+        },
+        /**
+         * **模型看到的东西**。
+         *
+         * 宿主发送时把每个引用的 `serialize()` 返回值原样拼进用户消息正文，所以这里
+         * 返回什么，模型就读到什么——既要短，也要让模型一眼看出「这是一个真实的网页
+         * URL」。标题是给人读的补充信息，没有就不写，别留一个空括号。
+         *
+         * **开头不能是 `@`**（理由见 `referenceTextOf`）：那会落进宿主的文件引用语法，
+         * 模型会被指示去 `read` 一个名叫 browser-tab 的路径。
+         */
+        serialize(ref) {
+          let payload;
+          try {
+            payload = JSON.parse(String(ref));
+          } catch {
+            // 解析不了就把 ref 原样交回去：至少模型还能看到那串东西，而不是一片空白。
+            return Promise.resolve(String(ref));
+          }
+          const url = String((payload && payload.url) || '');
+          if (url.length === 0) return Promise.resolve(String(ref));
+          return Promise.resolve(referenceTextOf(url, payload.title));
+        },
+      },
+    };
 
     function Switch({ checked, busy, onChange }) {
       return h('button', {
@@ -249,6 +496,8 @@ window.__ModuleLoader__.load({
       const [message, setMessage] = React.useState(null);
       /** 分组名的本地草稿；`null` 表示「跟着服务端走」（没在编辑）。 */
       const [titleDraft, setTitleDraft] = React.useState(null);
+      /** 浏览器路径的本地草稿，语义同上。 */
+      const [pathDraft, setPathDraft] = React.useState(null);
 
       const value = status.value || {};
       const bridge = value.bridge || {};
@@ -293,6 +542,21 @@ window.__ModuleLoader__.load({
         void patch('tabGroupTitle',
           next === '' ? '分组名已清空（不分组）' : `分组名已改为「${next}」`, next)
           .then(ok => { if (ok) setTitleDraft(null); });
+      };
+
+      /**
+       * 浏览器路径：与分组名同一套提交节奏（失焦/回车各一次），但**不做任何归一**——
+       * 路径里的空格、反斜杠、`Program Files` 那个空格全都是路径的一部分，压平或
+       * 改大小写都会把它改坏。只去首尾空白，留空 = 自动查找。
+       */
+      const serverPath = config && typeof config.browserPath === 'string' ? config.browserPath : '';
+      const pathValue = pathDraft === null ? serverPath : pathDraft;
+      const commitPath = () => {
+        const next = String(pathValue ?? '').trim();
+        if (next === serverPath.trim()) { setPathDraft(null); return; }
+        void patch('browserPath',
+          next === '' ? '浏览器路径已清空（自动查找）' : `浏览器路径已改为「${next}」`, next)
+          .then(ok => { if (ok) setPathDraft(null); });
       };
 
       const runAction = async (action, key) => {
@@ -467,6 +731,28 @@ window.__ModuleLoader__.load({
                 h('span', { key: 'hint', className: 'bc-hint' }, '留空 = 不分组'),
               ],
             }),
+            h(Row, {
+              configKey: 'browserPath',
+              title: '浏览器路径',
+              hint: HINTS.browserPath,
+              control: [
+                h('input', {
+                  key: 'field',
+                  className: 'bc-input bc-input-wide',
+                  type: 'text',
+                  'aria-label': '浏览器路径',
+                  value: pathValue,
+                  placeholder: '留空 = 自动查找',
+                  maxLength: BROWSER_PATH_MAX,
+                  spellCheck: false,
+                  disabled: busy === 'browserPath',
+                  onChange: event => setPathDraft(event.target.value),
+                  onBlur: () => commitPath(),
+                  onKeyDown: event => { if (event.key === 'Enter') event.currentTarget.blur(); },
+                }),
+                h('span', { key: 'hint', className: 'bc-hint' }, '留空 = 自动查找'),
+              ],
+            }),
             h(SelectRow, {
               configKey: 'focusPolicy', title: '聚焦策略', hint: HINTS.focusPolicy,
               value: config ? config.focusPolicy : 'avoid',
@@ -494,6 +780,35 @@ window.__ModuleLoader__.load({
           order: 17,
           label: () => '浏览器控制',
         }, BrowserControlPage));
+
+        // `@` 源：**声明式等待** `inputTriggers`，与宿主 `mountSettingsRoute` 同一个模式。
+        //
+        // 刻意不把它写进模块顶层的 `inject` 数组：那个数组是硬依赖，服务缺失时整个模块
+        // 都不激活——设置页会跟着一起消失。`@` 菜单只是锦上添花，它没条件不该连累设置页。
+        //
+        // `inner.get()` 在没有 inject 的 ctx 上是**直接抛**（不是返回 undefined），所以
+        // 读取必须包 try；`inner.get` 也可能根本不存在（手工拼的 ctx，见验台），回退读属性。
+        if (typeof ctx.inject !== 'function') return;
+        ctx.inject(['inputTriggers'], inner => {
+          let inputTriggers;
+          try {
+            inputTriggers = inner && typeof inner.get === 'function'
+              ? inner.get('inputTriggers')
+              : (inner && inner.inputTriggers);
+          } catch {
+            inputTriggers = inner && inner.inputTriggers;
+          }
+          if (!inputTriggers || typeof inputTriggers.registerSource !== 'function') return;
+          // 处置挂在**拿服务的那个 scope** 上：`inputTriggers` 被换掉/卸载时旧源跟着摘掉，
+          // 不留一个指向旧注册表的僵尸源。inner 不是真 ctx 时退回插件自己的 ctx——
+          // 与宿主 `mountSettingsRoute` 对 `scope.effect` 的能力判断同一套写法。
+          const effect = inner && typeof inner.effect === 'function'
+            ? inner.effect.bind(inner)
+            : (ctx && typeof ctx.effect === 'function' ? ctx.effect.bind(ctx) : null);
+          if (effect === null) return;
+          effect(() => inputTriggers.registerSource(tabReferenceSource),
+            'dsh-browser: @ browser-tabs source');
+        });
       },
     };
   },

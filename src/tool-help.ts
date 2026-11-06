@@ -38,6 +38,7 @@ export const TOOL_GROUPS: Readonly<Record<string, readonly string[]>> = {
 	tabs: [
 		'browser_tabs',
 		'browser_profile',
+		'browser_launch',
 		'browser_cleanup',
 		'browser_network_clear',
 	],

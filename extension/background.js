@@ -1079,6 +1079,22 @@ function normalizeAgentState(raw) {
 		 */
 		groups: record.groups && typeof record.groups === 'object' ? record.groups : {},
 		/**
+		 * `{ [tabId]: { at } }`：**我们亲手建出来**的标签页。
+		 *
+		 * 与 `tabs`（= owned）刻意分开，因为两者回答的不是同一个问题：
+		 *   - `owned` 是「这一页归 AI 用，关它不用 force」，`tabs.group` 把用户自己的页拉进
+		 *     组也算认领；
+		 *   - 这一张只说「这一页是 AI 打出来的」，用户的页面永远不会因为被分组而跑进来。
+		 *
+		 * 存在的唯一理由是输入框的 `@` 菜单要列「用户自己打开的标签页」。用 `owned` 过滤会
+		 * 把用户拖进 AI 组的页面一起滤掉（正是那种页面最该能被引用到），所以判定必须落在这
+		 * 张更窄的表上。只有 `cmdTabsOpen` 会写它。
+		 *
+		 * 同样放 session：service worker 被回收后 AI 开的页还在屏幕上，记录不能跟着消失，
+		 * 否则它下一秒就会出现在用户的 `@` 菜单里。
+		 */
+		openedByAgent: record.openedByAgent && typeof record.openedByAgent === 'object' ? record.openedByAgent : {},
+		/**
 		 * 最后一条命令的**策略快照**（事件路径要用的那一位）。
 		 *
 		 * 「用户接管就让出」与「导航完成补画高亮」都跑在**命令之外**（`tabs.onActivated`
@@ -1120,6 +1136,27 @@ async function persistAgentState() {
 		lastError = `写入标签页归属失败：${err.message}`
 	}
 	return agentState
+}
+
+/**
+ * 记住「这一页是 AI 亲手建的」。**只有 `cmdTabsOpen` 会调它。**
+ *
+ * 为什么不复用 `claimTab(own: true)`：那句同时被 `tabs.group` 用着——用户把**他自己的**
+ * 标签页拖进 AI 那个组，就是在说「这一个给你用」，于是它变成 owned；但它仍然是用户开的页，
+ * `@` 菜单必须照样列出来（那类页恰恰最值得被引用）。把两件事塞进同一个字段，就再也分不开
+ * 「AI 打出来的」和「用户递过来的」了，而菜单要的正是这一条窄判定。
+ *
+ * 单独一次读-改-写而不是塞进 `claimTab`：`claimTab` 有四个调用点、三种语义，多一个
+ * `opened` 选项就是多一条要在每个调用点上判断真假的岔路；这里只在一条命令的末尾追加一次
+ * 写，故意的窄。
+ */
+async function markOpenedByAgent(tabId) {
+	const state = await syncAgentState()
+	const id = Number(tabId)
+	if (!Number.isInteger(id)) return state
+	state.openedByAgent[id] = { at: Date.now() }
+	await persistAgentState()
+	return state
 }
 
 /** 记住「这个标签页是 AI 的」并把它设成默认目标。`own: false` 只挪目标，不认领。 */
@@ -1185,6 +1222,9 @@ async function forgetOwned(tabIds) {
 		if (!Number.isInteger(id)) continue
 		if (state.tabs[id] !== undefined) { delete state.tabs[id]; touched = true }
 		if (state.yields[id] !== undefined) { delete state.yields[id]; touched = true }
+		// 「AI 亲手开的」与归属必须同生共死：标签页没了/放手了，这条记录还留着的话，用户
+		// 以后用同一个 tabId 打开的真页会被 `@` 菜单永久误滤（tabId 会被 Chrome 复用）。
+		if (state.openedByAgent[id] !== undefined) { delete state.openedByAgent[id]; touched = true }
 		if (state.target === id) { state.target = null; touched = true }
 		if (state.highlight !== null && state.highlight.tabId === id) { dropHighlight = id; state.highlight = null; touched = true }
 	}
@@ -2810,6 +2850,9 @@ async function cmdTabsList() {
 			owned: owned.has(Number(t.id)),
 			yielded: state.yields[t.id] !== undefined,
 			incognito: t.incognito === true,
+			// `owned` 会把「用户拖进 AI 组的页」也算成我们的，所以输入框的 `@` 菜单不能拿它
+			// 判「这页是 AI 自己开的」——这里单独报一个只在 `tabs.open` 里写过的窄字段。
+			openedByAgent: state.openedByAgent[t.id] !== undefined,
 		})),
 	};
 }
@@ -3086,6 +3129,9 @@ async function cmdTabsOpen(params) {
 		: await addToAgentGroup(created.id, wantedGroupTitle);
 	// 自己开的标签页就是自己的（分组失败也一样），并成为默认目标。
 	await claimTab(created.id, { own: true });
+	// 单独再记一笔「这是 AI 亲手开的」：`owned` 那一张还会装用户拖进组的页，而输入框的
+	// `@` 菜单只肯放过用户自己的页。两条记录缺一条，菜单就会把 AI 的页列给用户看。
+	await markOpenedByAgent(created.id);
 	return {
 		tabId: created.id,
 		url: fresh?.url,
